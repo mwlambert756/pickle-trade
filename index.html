@@ -1011,17 +1011,20 @@ function App(){
 
   useEffect(()=>{
     let mounted=true;
+    // Timeout fallback — if Supabase doesn't respond in 6s, show login screen
+    const timeout=setTimeout(()=>{if(mounted&&authState==='loading')setAuthState('out');},6000);
     sb.auth.getSession().then(async({data:{session}})=>{
+      clearTimeout(timeout);
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else setAuthState('out');
-    });
+    }).catch(()=>{clearTimeout(timeout);if(mounted)setAuthState('out');});
     const {data:{subscription}}=sb.auth.onAuthStateChange(async(_evt,session)=>{
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else{setMe(null);setAuthState('out');}
     });
-    return()=>{mounted=false;subscription.unsubscribe();};
+    return()=>{mounted=false;clearTimeout(timeout);subscription.unsubscribe();};
   },[loadProfile]);
 
   const signOut=async()=>{await sb.auth.signOut();};
