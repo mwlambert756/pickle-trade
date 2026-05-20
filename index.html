@@ -1135,45 +1135,49 @@ function App(){
 
   // --- AUTH + PROFILE LOAD ---
   const loadProfile=useCallback(async(userId)=>{
-    const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
-    const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
-    if(prof){
-      const meObj={
-        id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
-        vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
-        since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
-        resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
-        ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
-        cashapp:prof.cashapp||'',venmo:prof.venmo||'',
-        rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
-        lat:prof.lat,lng:prof.lng,
-      };
-      setMe(meObj);
-      if(us){
-        setSettings({
-          name:meObj.name,location:meObj.loc,skill:meObj.skill,
-          cashapp:meObj.cashapp,venmo:meObj.venmo,
-          notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
-          notifTrades:us.notif_trades,notifMessages:us.notif_messages,
-          preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
-        });
+    try{
+      const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
+      const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
+      if(prof){
+        const meObj={
+          id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
+          vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
+          since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
+          resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
+          ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
+          cashapp:prof.cashapp||'',venmo:prof.venmo||'',
+          rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
+          lat:prof.lat,lng:prof.lng,
+        };
+        setMe(meObj);
+        if(us){
+          setSettings({
+            name:meObj.name,location:meObj.loc,skill:meObj.skill,
+            cashapp:meObj.cashapp,venmo:meObj.venmo,
+            notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
+            notifTrades:us.notif_trades,notifMessages:us.notif_messages,
+            preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+          });
+        }
       }
-    }
+    }catch(err){console.error('loadProfile error',err);}
   },[]);
 
   useEffect(()=>{
     let mounted=true;
+    // Safety net: if auth check takes >6s, fall back to sign-in screen
+    const timeout=setTimeout(()=>{if(mounted)setAuthState(s=>s==='loading'?'out':s);},6000);
     sb.auth.getSession().then(async({data:{session}})=>{
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else setAuthState('out');
-    });
+    }).catch(()=>{if(mounted)setAuthState('out');});
     const {data:{subscription}}=sb.auth.onAuthStateChange(async(_evt,session)=>{
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else{setMe(null);setAuthState('out');}
     });
-    return()=>{mounted=false;subscription.unsubscribe();};
+    return()=>{mounted=false;clearTimeout(timeout);subscription.unsubscribe();};
   },[loadProfile]);
 
   const signOut=async()=>{await sb.auth.signOut();};
