@@ -242,7 +242,7 @@ function mapConversation(row,meId){
 }
 const ccol=(s)=>s>=9?C.ok:s>=7?C.lm:s>=5?C.am:C.rd;
 const clbl=(s)=>s===10?'Brand New':s>=9?'Like New':s>=7?'Good':s>=5?'Fair':'Heavy Use';
-const tcol=(s)=>s>=95?C.ok:s>=85?C.lm:C.am;
+const rcol=(r)=>r>=4.8?C.ok:r>=4.5?C.lm:r>=4.0?C.am:C.mt;
 const CI={paddle:'🏓',shoes:'👟',bag:'🎒',apparel:'👕',accessories:'⚡'};
 const CL={paddle:'Paddle',shoes:'Shoes',bag:'Bag',apparel:'Apparel',accessories:'Accessories'};
 const wtClass=(w)=>{const v=parseFloat(w);return v<7.6?'Light':v<=8.0?'Mid':'Heavy';};
@@ -251,7 +251,7 @@ const findSimilar=(target,n=4)=>!target?[]:LS.filter(l=>l.cat==='paddle'&&!(l.br
 const findWishMatches=()=>{const out=[];WISH.forEach(w=>LS.forEach(l=>{if(l.brand===w.brand&&l.model===w.model&&l.price<=w.maxP)out.push(l);}));return out;};
 
 function Av({u,sz=36,edit}){return e('div',{style:{position:'relative',flexShrink:0}},[e('div',{key:'a',style:{width:sz,height:sz,borderRadius:'50%',background:u.ac||C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:sz*.32,fontWeight:700,color:'#fff'}},u.ini),edit&&e('div',{key:'cm',style:{position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:C.lm,border:`2px solid ${C.sf}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,cursor:'pointer'}},'📷')]);}
-function Tr({s}){const col=tcol(s);return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:col+'20',borderRadius:10,padding:'2px 7px',border:`1px solid ${col}40`}},[e('span',{key:'i',style:{fontSize:9,color:col}},'⬡'),e('span',{key:'v',style:{fontSize:10,fontWeight:700,color:col}},s)]);}
+function Cred({u,compact}){const col=rcol(u.rating||0);if(!u.rev||u.rev===0)return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:C.mt+'15',borderRadius:10,padding:'2px 7px',border:`1px solid ${C.mt}30`}},[e('span',{style:{fontSize:9,color:C.mt,fontWeight:700}},'New seller')]);return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:col+'18',borderRadius:10,padding:'2px 7px',border:`1px solid ${col}40`}},[e('span',{key:'s',style:{fontSize:9,color:col}},'★'),e('span',{key:'r',style:{fontSize:10,fontWeight:800,color:col}},u.rating),compact?null:e('span',{key:'n',style:{fontSize:9,color:col,opacity:.85}},`(${u.rev})`)]);}
 function St({r}){return e('span',{style:{fontSize:10,color:C.am}},('★'.repeat(Math.floor(r)))+'☆'.repeat(5-Math.floor(r)));}
 function FollowBtn({userId,following,onToggle,sz='sm'}){
   const isF=following.includes(userId);
@@ -273,7 +273,7 @@ function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showV
           u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓'),
           followsMe&&e('span',{style:{fontSize:8,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px'}},'Follows you'),
         ]),
-        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?`👥 Followed by ${u.via} you know · ⬡ ${u.trust}`:`📍 ${u.loc||'—'} · ⬡ ${u.trust} trust`),
+        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?`👥 Followed by ${u.via} you know · ${u.sales||0} sales`:`📍 ${u.loc||'—'} · ${u.rev>0?`★${u.rating} (${u.rev})`:'New seller'} · ${u.sales||0} sales`),
       ]),
       u.id!==meId&&e(FollowBtn,{key:'f',userId:u.id,following,onToggle}),
     ]);
@@ -296,8 +296,8 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
     e('div',{key:'inf',style:{padding:'8px 10px'}},[
       e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:8,color:C.lm,fontWeight:800}},L.brand),showMatch&&e(MatchPct,{pct:showMatch})]),
       e('div',{key:'mo',style:{fontSize:11,fontWeight:700,color:C.tx,lineHeight:1.2,marginBottom:4}},L.model),
-      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}},[L.type!=='trade'?e('span',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${L.price}`):e('span',{style:{fontSize:10,fontWeight:700,color:C.tl}},'Trade'),e(CB,{c:L.cond})]),
-      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e('span',{style:{color:C.lm,fontSize:9}},'✓'),isFollowing(u.id)&&e('span',{style:{fontSize:8,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 4px',flexShrink:0}},'✓ Following')]),e(Tr,{s:u.trust})]),
+      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:5}},[L.type!=='trade'?e('span',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${L.price}`):e('span',{style:{fontSize:10,fontWeight:700,color:C.tl}},'Trade'),e('span',{style:{fontSize:10,fontWeight:800,color:ccol(L.cond),background:ccol(L.cond)+'18',borderRadius:6,padding:'2px 7px',border:`1px solid ${ccol(L.cond)}35`}},clbl(L.cond))]),
+      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e('span',{title:'Verified',style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:11,height:11,borderRadius:'50%',background:C.lm,color:'#fff',fontSize:7,fontWeight:900,flexShrink:0}},'✓'),isFollowing(u.id)&&e('span',{style:{fontSize:8,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 4px',flexShrink:0}},'✓ Following')]),e(Cred,{u,compact:true})]),
       (followerCount(u.id)>0||mutualCount(u.id)>0)&&e('div',{key:'soc',style:{display:'flex',alignItems:'center',gap:6,marginTop:4,paddingTop:4,borderTop:`1px solid ${C.dm}`}},[
         followerCount(u.id)>0&&e('span',{key:'fc',style:{fontSize:8,color:C.mt,fontWeight:700}},`👥 ${followerCount(u.id)} followers`),
         mutualCount(u.id)>0&&e('span',{key:'mu',style:{fontSize:8,color:C.pu,fontWeight:800}},`· ${mutualCount(u.id)} mutual`),
@@ -353,7 +353,7 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me}){
       e(Sec,{title:'PROFILE',key:'p'},[
         e(Row,{key:'n',label:'Display name',desc:'Visible to other users',r:e('span',{style:{fontSize:12,color:C.tx}},s.name)}),
         e(Row,{key:'l',label:'Location',desc:'Used for distance',r:e('span',{style:{fontSize:12,color:C.tx}},s.location)}),
-        e(Row,{key:'sk',label:'DUPR Rating',desc:'Skill level',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
+        e(Row,{key:'sk',label:'DUPR Rating',desc:'Dynamic Universal Pickleball Rating (1.0–8.0)',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
       ]),
       e(Sec,{title:'PAYMENT HANDLES',key:'pay'},[
         e('div',{style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.5,padding:'8px 10px',background:C.tl+'10',borderRadius:8,border:`1px solid ${C.tl}30`}},'🔒 Only revealed inside confirmed chat threads after a deal is accepted. Not shown publicly.'),
@@ -455,11 +455,10 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
           e('div',{style:{display:'flex',alignItems:'center',gap:10}},[
             e(Av,{u,sz:42}),
             e('div',{style:{flex:1}},[
-              e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),
-              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${u.rating} (${u.rev})`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
-              e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`📍 ${u.dist}mi · ⚡ ${u.resp} · 🏓 ${u.skill}`),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',gap:3,background:C.lm+'18',color:C.lm,fontSize:8,fontWeight:800,borderRadius:6,padding:'2px 6px',border:`1px solid ${C.lm}40`}},['✓ Verified'])]),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${u.rating} (${u.rev} reviews)`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`📍 ${u.dist}mi · ⚡ ${u.resp} · 🏓 ${u.skill} · ${u.sales||0} sales`),
             ]),
-            e(Tr,{s:u.trust}),
           ]),
           u.id!==meId&&e('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.dm}`}},[
             mutual>0?e(MutualBadge,{key:'mb',count:mutual}):e('span',{key:'mb',style:{fontSize:9,color:C.mt}},'Follow to build your trusted network'),
@@ -681,7 +680,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
       setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,unread:0}));
     }
   },[activeIdx,meId]);
-  const QR=['Still available?','Can you meet up?','Best price?'];
+  const QR=['Still available?','What\'s your best price?','Can you meet up?','Can you ship?'];
   if(activeIdx!==null){
     const th=msgs[activeIdx];
     const send=async(m)=>{
@@ -720,7 +719,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
     return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
       paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu}),
-      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:16}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),e('div',{style:{display:'flex',alignItems:'center',gap:5,marginTop:1}},[e(Tr,{s:th.wu.trust}),e('span',{style:{fontSize:9,color:C.mt}},`· ${th.wu.dist}mi · ${th.wu.lastActive}`)])])]),
+      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:16}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',background:C.lm+'18',color:C.lm,fontSize:8,fontWeight:800,borderRadius:6,padding:'1px 5px',border:`1px solid ${C.lm}40`}},'✓ Verified')]),e('div',{style:{display:'flex',alignItems:'center',gap:5,marginTop:1}},[e(Cred,{u:th.wu,compact:false}),e('span',{style:{fontSize:9,color:C.mt}},`· ${th.wu.dist}mi · ${th.wu.lastActive}`)])])]),
       e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e('span',{style:{fontSize:15}},'🔥'):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:8,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} ⇄ trade`:th.ref.m)]),th.dealStatus==='accepted'&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'✓ ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer})),e('div',{key:'end',ref:endR})]),
       showSendPay&&e('div',{key:'pay',style:{padding:'8px 12px',background:C.cta+'10',borderTop:`1px solid ${C.cta}30`}},[e('button',{onClick:()=>setPaySheet(true),style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.cta,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`💸 Send Payment · $${lastAccept?.amount||0}`)]),
@@ -732,7 +731,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
     e('div',{key:'h',style:{padding:'12px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{fontSize:18,fontWeight:900,color:C.tx}},'Messages'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${msgs.filter(m=>m.unread>0).length} unread · ${msgs.length} conversations`)]),
     e('div',{key:'l'},msgs.map((th,idx)=>e('div',{key:th.id,onClick:()=>setActiveIdx(idx),style:{padding:'11px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:10,background:th.unread>0?C.lm+'08':'transparent'}},[
       e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,fontWeight:900,color:'#fff'}},th.unread),th.isM&&e('div',{style:{position:'absolute',bottom:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,border:`1.5px solid ${C.bg}`}},'🔥')]),
-      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.lm:th.isM?C.lm:C.lm+'AA',fontWeight:700,marginBottom:2}},`${th.isM?'🔥 Trade: ':th.dealStatus==='accepted'?'✓ Deal: ':'Re: '}${th.ref.b} ${th.ref.m}`),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginBottom:3}},th.last),e(Tr,{s:th.wu.trust})]),
+      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.lm:th.isM?C.lm:C.lm+'AA',fontWeight:700,marginBottom:2}},`${th.isM?'🔥 Trade: ':th.dealStatus==='accepted'?'✓ Deal: ':'Re: '}${th.ref.b} ${th.ref.m}`),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginBottom:3}},th.last),e(Cred,{u:th.wu,compact:true})]),
     ]))),
   ]);
 }
@@ -826,6 +825,8 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
   const tradeReady=gear.filter(g=>g.w.includes('trade')).length>0&&wish.length>0;
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
+  const wishMatchCt=findWishMatches().length;
+  const gearForSaleCt=gear.filter(g=>g.w.length>0).length;
   const priceDrop=saved.filter(id=>{
     const L=LS.find(l=>l.id===id);
     const meta=savedMeta&&savedMeta[id];
@@ -841,7 +842,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       e('div',{style:{display:'flex',alignItems:'flex-start',gap:12,marginBottom:11}},[
         e(Av,{u:M,sz:64,edit:true}),
         e('div',{style:{flex:1,minWidth:0,paddingRight:30}},[
-          e('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:2}},[e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},M.name),M.vfd&&e('span',{style:{fontSize:11,color:C.lm}},'✓')]),
+          e('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:2,flexWrap:'wrap'}},[e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},M.name),M.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',gap:3,background:C.lm+'18',color:C.lm,fontSize:9,fontWeight:800,borderRadius:7,padding:'2px 7px',border:`1px solid ${C.lm}40`}},['✓ Verified'])]),
           e('div',{style:{fontSize:10,color:C.mt,marginBottom:5}},`📍 ${M.loc} · Since ${M.since}`),
           e('div',{style:{display:'inline-flex',alignItems:'center',gap:5,background:C.pu+'20',border:`1px solid ${C.pu}40`,borderRadius:7,padding:'3px 9px'}},[e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,letterSpacing:.3}},'🏓 DUPR'),e('span',{style:{fontSize:11,color:C.pu,fontWeight:900}},M.skill)]),
           e('div',{style:{display:'flex',gap:5,flexWrap:'wrap',marginTop:6}},M.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'20',borderRadius:8,padding:'2px 7px',border:`1px solid ${C.tl}30`}},b))),
@@ -859,7 +860,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         e('button',{onClick:()=>setTab('community'),style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center',border:`1px solid ${C.bd}`,cursor:'pointer'}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.pu}},(following||[]).length),e('div',{style:{fontSize:8,color:C.mt,marginTop:1}},'👥 Following')]),
       ]),
     ]),
-    e('div',{key:'tabs',style:{display:'flex',background:C.sf,borderBottom:`1px solid ${C.dm}`}},['gear','wishlist','listings','community'].map(t=>e('button',{key:t,onClick:()=>setTab(t),style:{flex:1,padding:'10px 0',border:'none',background:'transparent',borderBottom:`2px solid ${tab===t?C.lm:'transparent'}`,color:tab===t?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},t==='gear'?'🏓 Gear':t==='wishlist'?'🔍 Wishlist':t==='listings'?'📦 Listed':'👥 Community'))),
+    e('div',{key:'tabs',style:{display:'flex',background:C.sf,borderBottom:`1px solid ${C.dm}`,position:'sticky',top:0,zIndex:5}},[['gear','🏓','Gear',gearForSaleCt],['wishlist','🔍','Wishlist',wishMatchCt],['listings','📦','Listed',0],['community','👥','Community',0]].map(([t,ic,lbl,badge])=>e('button',{key:t,onClick:()=>setTab(t),style:{flex:1,padding:'11px 0 9px',border:'none',background:'transparent',borderBottom:`2px solid ${tab===t?C.lm:'transparent'}`,color:tab===t?C.lm:C.mt,fontSize:12,fontWeight:700,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:2,position:'relative'}},[e('span',{key:'i',style:{fontSize:15}},ic),e('span',{key:'l',style:{fontSize:10,fontWeight:tab===t?800:600}},lbl),badge>0&&e('span',{key:'b',style:{position:'absolute',top:4,right:'25%',minWidth:14,height:14,borderRadius:7,background:t==='wishlist'?C.cta:C.lm,color:'#fff',fontSize:8,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px',border:`1.5px solid ${C.sf}`}},badge)]))),
     e('div',{key:'c',style:{padding:13}},[
       tab==='gear'&&e('div',null,[
         e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:9}},'MY PADDLE INVENTORY'),
@@ -923,7 +924,7 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
   return e('div',null,[
     e('div',{key:'hdr',style:{background:C.pu+'10',border:`1px solid ${C.pu}30`,borderRadius:11,padding:11,marginBottom:10,display:'flex',alignItems:'center',gap:10}},[
       e('div',{style:{fontSize:20}},'🤝'),
-      e('div',{style:{flex:1}},[e('div',{style:{fontSize:11,fontWeight:800,color:C.pu}},'Build trust through connections'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1,lineHeight:1.4}},`${mutualCt} mutual connection${mutualCt===1?'':'s'} — buyers trust sellers they know`)]),
+      e('div',{style:{flex:1}},[e('div',{style:{fontSize:11,fontWeight:800,color:C.pu}},'Grow your network'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1,lineHeight:1.4}},`${mutualCt} mutual connection${mutualCt===1?'':'s'} — buyers prefer sellers they know`)]),
     ]),
     e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${sub===k?C.pu:C.dm}`,background:sub===k?C.pu+'20':'transparent',color:sub===k?C.pu:C.mt}},`${l} · ${n}`))),
     e('div',{key:'srch',style:{position:'relative',marginBottom:11}},[
