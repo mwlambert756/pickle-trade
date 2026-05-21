@@ -19,7 +19,7 @@ function memStorage(){const s={};return{getItem:k=>s[k]??null,setItem:(k,v)=>{s[
 let _store;try{window.localStorage.setItem('_sb','1');window.localStorage.removeItem('_sb');_store=window.localStorage;}catch(e){_store=memStorage();}
 const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,storage:_store}});
 const {useState,useRef,useEffect,useCallback}=React;
-const C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#FF7A59',ok:'#6FCF97'};
+const C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#4DA8FF',ok:'#6FCF97'};
 const e=React.createElement;
 
 const ME={id:0,name:'Alex Rivera',ini:'AR',vfd:true,loc:'Maryville, TN',skill:'3.5',since:'2023',resp:'< 2 hrs',sales:8,bio:'Local pickleball enthusiast, always looking to upgrade my paddle game. Verified seller — fast meet-ups around Maryville. Hit me up if you have any Selkirk or JOOLA carbon paddles!',ac:'#4DA8FF',bdg:['Community Member'],cashapp:'$alexrivera',venmo:'@alex-rivera-tn'};
@@ -242,7 +242,7 @@ function mapConversation(row,meId){
 }
 const ccol=(s)=>s>=9?C.ok:s>=7?C.lm:s>=5?C.am:C.rd;
 const clbl=(s)=>s===10?'Brand New':s>=9?'Like New':s>=7?'Good':s>=5?'Fair':'Heavy Use';
-const rcol=(r)=>r>=4.8?C.ok:r>=4.5?C.lm:r>=4.0?C.am:C.mt;
+const tcol=(s)=>s>=95?C.ok:s>=85?C.lm:C.am;
 const CI={paddle:'🏓',shoes:'👟',bag:'🎒',apparel:'👕',accessories:'⚡'};
 const CL={paddle:'Paddle',shoes:'Shoes',bag:'Bag',apparel:'Apparel',accessories:'Accessories'};
 const wtClass=(w)=>{const v=parseFloat(w);return v<7.6?'Light':v<=8.0?'Mid':'Heavy';};
@@ -251,7 +251,7 @@ const findSimilar=(target,n=4)=>!target?[]:LS.filter(l=>l.cat==='paddle'&&!(l.br
 const findWishMatches=()=>{const out=[];WISH.forEach(w=>LS.forEach(l=>{if(l.brand===w.brand&&l.model===w.model&&l.price<=w.maxP)out.push(l);}));return out;};
 
 function Av({u,sz=36,edit}){return e('div',{style:{position:'relative',flexShrink:0}},[e('div',{key:'a',style:{width:sz,height:sz,borderRadius:'50%',background:u.ac||C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:sz*.32,fontWeight:700,color:'#fff'}},u.ini),edit&&e('div',{key:'cm',style:{position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:C.lm,border:`2px solid ${C.sf}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,cursor:'pointer'}},'📷')]);}
-function Cred({u,compact}){const col=rcol(u.rating||0);if(!u.rev||u.rev===0)return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:C.mt+'15',borderRadius:10,padding:'2px 7px',border:`1px solid ${C.mt}30`}},[e('span',{style:{fontSize:9,color:C.mt,fontWeight:700}},'New seller')]);return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:col+'18',borderRadius:10,padding:'2px 7px',border:`1px solid ${col}40`}},[e('span',{key:'s',style:{fontSize:9,color:col}},'★'),e('span',{key:'r',style:{fontSize:10,fontWeight:800,color:col}},u.rating),compact?null:e('span',{key:'n',style:{fontSize:9,color:col,opacity:.85}},`(${u.rev})`)]);}
+function Tr({s}){const col=tcol(s);return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:col+'20',borderRadius:10,padding:'2px 7px',border:`1px solid ${col}40`}},[e('span',{key:'i',style:{fontSize:9,color:col}},'⬡'),e('span',{key:'v',style:{fontSize:10,fontWeight:700,color:col}},s)]);}
 function St({r}){return e('span',{style:{fontSize:10,color:C.am}},('★'.repeat(Math.floor(r)))+'☆'.repeat(5-Math.floor(r)));}
 function FollowBtn({userId,following,onToggle,sz='sm'}){
   const isF=following.includes(userId);
@@ -271,9 +271,9 @@ function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showV
         e('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}},[
           e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),
           u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓'),
-          followsMe&&e('span',{style:{fontSize:8,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px'}},'Follows you'),
+          followsMe&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px'}},'Follows you'),
         ]),
-        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?`👥 Followed by ${u.via} you know · ${u.sales||0} sales`:`📍 ${u.loc||'—'} · ${u.rev>0?`★${u.rating} (${u.rev})`:'New seller'} · ${u.sales||0} sales`),
+        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?`👥 Followed by ${u.via} you know`:`📍 ${u.loc||'—'} · ${u.sales||0} sales`),
       ]),
       u.id!==meId&&e(FollowBtn,{key:'f',userId:u.id,following,onToggle}),
     ]);
@@ -288,19 +288,19 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
   return e('div',{onClick:onView,style:{background:C.cd,borderRadius:13,border:`1px solid ${C.bd}`,overflow:'hidden',cursor:'pointer'}},[
     e('div',{key:'i',style:{height:large?138:108,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}},[
       L.photos&&L.photos[0]?e('img',{src:L.photos[0],style:{width:'100%',height:'100%',objectFit:'cover'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'55',sz:large?56:42}):e('div',{style:{fontSize:large?40:30}},CI[L.cat]),
-      e('div',{key:'bc',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'2px 6px',fontSize:8,fontWeight:800,color:C.tx,border:`1px solid ${C.bd}`}},`${CI[L.cat]} ${CL[L.cat]}`),
+      e('div',{key:'bc',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'2px 6px',fontSize:9,fontWeight:800,color:C.tx,border:`1px solid ${C.bd}`}},`${CI[L.cat]} ${CL[L.cat]}`),
       L.tag&&e('div',{key:'t',style:{position:'absolute',top:6,right:6}},[e(TP,{t:L.tag})]),
       e('div',{key:'sv',onClick:ev=>{ev.stopPropagation();onSave(L.id);},style:{position:'absolute',bottom:6,right:6,width:24,height:24,background:C.cd,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:`1px solid ${saved?C.lm:C.bd}`,fontSize:11,color:saved?C.lm:C.mt}},'♥'),
-      e('div',{key:'d',style:{position:'absolute',bottom:6,left:6,fontSize:8,color:'#fff',background:'rgba(31,41,51,0.6)',borderRadius:6,padding:'2px 6px'}},`📍 ${L.dist}mi`),
+      e('div',{key:'d',style:{position:'absolute',bottom:6,left:6,fontSize:9,color:'#fff',background:'rgba(31,41,51,0.6)',borderRadius:6,padding:'2px 6px'}},`📍 ${L.dist}mi`),
     ]),
     e('div',{key:'inf',style:{padding:'8px 10px'}},[
-      e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:8,color:C.lm,fontWeight:800}},L.brand),showMatch&&e(MatchPct,{pct:showMatch})]),
+      e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:9,color:C.lm,fontWeight:800}},L.brand),showMatch&&e(MatchPct,{pct:showMatch})]),
       e('div',{key:'mo',style:{fontSize:11,fontWeight:700,color:C.tx,lineHeight:1.2,marginBottom:4}},L.model),
-      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:5}},[L.type!=='trade'?e('span',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${L.price}`):e('span',{style:{fontSize:10,fontWeight:700,color:C.tl}},'Trade'),e('span',{style:{fontSize:10,fontWeight:800,color:ccol(L.cond),background:ccol(L.cond)+'18',borderRadius:6,padding:'2px 7px',border:`1px solid ${ccol(L.cond)}35`}},clbl(L.cond))]),
-      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e('span',{title:'Verified',style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:11,height:11,borderRadius:'50%',background:C.lm,color:'#fff',fontSize:7,fontWeight:900,flexShrink:0}},'✓'),isFollowing(u.id)&&e('span',{style:{fontSize:8,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 4px',flexShrink:0}},'✓ Following')]),e(Cred,{u,compact:true})]),
+      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}},[L.type!=='trade'?e('span',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${L.price}`):e('span',{style:{fontSize:10,fontWeight:700,color:C.tl}},'Trade'),e(CB,{c:L.cond})]),
+      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e('span',{style:{color:C.lm,fontSize:9}},'✓'),isFollowing(u.id)&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 4px',flexShrink:0}},'✓ Following')]),u.sales>0&&e('span',{style:{fontSize:9,color:C.mt}},`${u.sales} sales`)]),
       (followerCount(u.id)>0||mutualCount(u.id)>0)&&e('div',{key:'soc',style:{display:'flex',alignItems:'center',gap:6,marginTop:4,paddingTop:4,borderTop:`1px solid ${C.dm}`}},[
-        followerCount(u.id)>0&&e('span',{key:'fc',style:{fontSize:8,color:C.mt,fontWeight:700}},`👥 ${followerCount(u.id)} followers`),
-        mutualCount(u.id)>0&&e('span',{key:'mu',style:{fontSize:8,color:C.pu,fontWeight:800}},`· ${mutualCount(u.id)} mutual`),
+        followerCount(u.id)>0&&e('span',{key:'fc',style:{fontSize:9,color:C.mt,fontWeight:700}},`👥 ${followerCount(u.id)} followers`),
+        mutualCount(u.id)>0&&e('span',{key:'mu',style:{fontSize:9,color:C.pu,fontWeight:800}},`· ${mutualCount(u.id)} mutual`),
       ]),
     ]),
   ]);
@@ -328,7 +328,7 @@ function OfferOverlay({L,onClose,onSubmit}){
   ]);
 }
 
-function SettingsOverlay({onClose,settings,setSettings,onSignOut,me}){
+function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety}){
   const [s,setS]=useState({...settings});
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
   const save=async()=>{
@@ -353,7 +353,7 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me}){
       e(Sec,{title:'PROFILE',key:'p'},[
         e(Row,{key:'n',label:'Display name',desc:'Visible to other users',r:e('span',{style:{fontSize:12,color:C.tx}},s.name)}),
         e(Row,{key:'l',label:'Location',desc:'Used for distance',r:e('span',{style:{fontSize:12,color:C.tx}},s.location)}),
-        e(Row,{key:'sk',label:'DUPR Rating',desc:'Dynamic Universal Pickleball Rating (1.0–8.0)',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
+        e(Row,{key:'sk',label:'DUPR Rating',desc:'Skill level',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
       ]),
       e(Sec,{title:'PAYMENT HANDLES',key:'pay'},[
         e('div',{style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.5,padding:'8px 10px',background:C.tl+'10',borderRadius:8,border:`1px solid ${C.tl}30`}},'🔒 Only revealed inside confirmed chat threads after a deal is accepted. Not shown publicly.'),
@@ -371,6 +371,7 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me}){
         e(Row,{key:'bl',label:'Blocked users',desc:`${s.blockedCt||0} blocked`,r:e('span',{style:{fontSize:13,color:C.mt}},'›')}),
       ]),
       e(Sec,{title:'ACCOUNT',key:'ac'},[
+        e('div',{key:'sf',onClick:()=>{onClose();onOpenSafety&&onOpenSafety();},style:{padding:'10px 0',cursor:'pointer',borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},[e('div',null,[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'🛡️ Safe meet-up guide'),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},'Best practices for in-person exchanges')]),e('span',{style:{fontSize:13,color:C.mt}},'›')])]),
         e(Row,{key:'tos',label:'Terms of Service',r:e('span',{style:{fontSize:13,color:C.mt}},'›')}),
         e(Row,{key:'pp',label:'Privacy Policy',r:e('span',{style:{fontSize:13,color:C.mt}},'›')}),
         e('div',{key:'so',onClick:onSignOut,style:{padding:'10px 0',cursor:'pointer'}},[e('div',{style:{fontSize:12,color:C.rd,fontWeight:600}},'Sign out')]),
@@ -387,17 +388,27 @@ function PriceComp({avgS,avgL,rng,userPrice}){
   const avgPct=((avgS-lo)/span)*100;
   return e('div',{style:{background:C.lm+'10',borderRadius:11,padding:11,border:`1px solid ${C.lm}30`}},[
     e('div',{key:'h',style:{fontSize:9,fontWeight:800,color:C.lm,letterSpacing:.5,marginBottom:8}},'💡 PRICE INTELLIGENCE'),
-    e('div',{key:'r',style:{display:'flex',gap:9,marginBottom:9}},[e('div',{style:{flex:1,background:C.cd,borderRadius:8,padding:'7px 9px'}},[e('div',{style:{fontSize:8,color:C.mt,fontWeight:700}},'AVG SOLD'),e('div',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${avgS}`)]),e('div',{style:{flex:1,background:C.cd,borderRadius:8,padding:'7px 9px'}},[e('div',{style:{fontSize:8,color:C.mt,fontWeight:700}},'AVG LISTED'),e('div',{style:{fontSize:14,fontWeight:900,color:C.tx}},`$${avgL}`)])]),
-    e('div',{key:'sc',style:{position:'relative',height:30}},[e('div',{style:{position:'absolute',top:13,left:0,right:0,height:4,background:C.dm,borderRadius:2}}),e('div',{style:{position:'absolute',top:8,left:`calc(${avgPct}% - 5px)`,width:10,height:14,background:C.lm,borderRadius:2}}),upPct!==null&&e('div',{style:{position:'absolute',top:5,left:`calc(${upPct}% - 6px)`,width:12,height:20,background:col,borderRadius:3,border:`2px solid ${C.bg}`}}),e('div',{style:{position:'absolute',bottom:0,left:0,fontSize:8,color:C.mt}},`$${lo}`),e('div',{style:{position:'absolute',bottom:0,right:0,fontSize:8,color:C.mt}},`$${hi}`)]),
+    e('div',{key:'r',style:{display:'flex',gap:9,marginBottom:9}},[e('div',{style:{flex:1,background:C.cd,borderRadius:8,padding:'7px 9px'}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:700}},'AVG SOLD'),e('div',{style:{fontSize:14,fontWeight:900,color:C.lm}},`$${avgS}`)]),e('div',{style:{flex:1,background:C.cd,borderRadius:8,padding:'7px 9px'}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:700}},'AVG LISTED'),e('div',{style:{fontSize:14,fontWeight:900,color:C.tx}},`$${avgL}`)])]),
+    e('div',{key:'sc',style:{position:'relative',height:30}},[e('div',{style:{position:'absolute',top:13,left:0,right:0,height:4,background:C.dm,borderRadius:2}}),e('div',{style:{position:'absolute',top:8,left:`calc(${avgPct}% - 5px)`,width:10,height:14,background:C.lm,borderRadius:2}}),upPct!==null&&e('div',{style:{position:'absolute',top:5,left:`calc(${upPct}% - 6px)`,width:12,height:20,background:col,borderRadius:3,border:`2px solid ${C.bg}`}}),e('div',{style:{position:'absolute',bottom:0,left:0,fontSize:9,color:C.mt}},`$${lo}`),e('div',{style:{position:'absolute',bottom:0,right:0,fontSize:9,color:C.mt}},`$${hi}`)]),
     verdict&&e('div',{style:{fontSize:10,color:col,fontWeight:600,marginTop:4}},verdict),
   ]);
 }
 
-function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId}){
+function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide}){
   useEffect(()=>{
     if(L&&typeof L.id==='string')sb.rpc('increment_listing_views',{listing_uuid:L.id}).then(()=>{});
   },[L&&L.id]);
   const u=gU(L.sid);
+  const [showMenu,setShowMenu]=useState(false);
+  const [showEditMsg,setShowEditMsg]=useState(false);
+  const isMyListing=meId&&L.sid===meId;
+  const handleShare=()=>{
+    const url=`${window.location.origin}${window.location.pathname}#listing-${L.id}`;
+    if(navigator.share){navigator.share({title:`${L.brand} ${L.model}`,text:`Check out this ${L.brand} ${L.model} on DINK Exchange`,url}).catch(()=>{});}
+    else{try{navigator.clipboard.writeText(url);showToast&&showToast('Link copied to clipboard');}catch(e){showToast&&showToast('Share unavailable');}}
+  };
+  const handleReport=()=>{setShowMenu(false);showToast&&showToast('Listing reported. Thanks for keeping DINK safe.');};
+  const handleStillAvailable=()=>{showToast&&showToast('Asked seller if still available');onMsg();};
   // Mutual followers: people I follow who also follow this seller
   const [mutual,setMutual]=useState(0);
   useEffect(()=>{
@@ -421,11 +432,27 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   const similar=L.cat==='paddle'?findSimilar(L,4):[];
   const isTrade=L.type==='trade';
   return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
-    e('div',{key:'hdr',style:{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
-      e('button',{onClick:onBack,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:18,padding:0,width:24}},'‹'),
+    e('div',{key:'hdr',style:{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,flexShrink:0,position:'relative'}},[
+      e('button',{onClick:onBack,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:20,padding:0,width:24,lineHeight:1}},'←'),
       e('span',{style:{flex:1,fontSize:12,fontWeight:600,color:C.mt}},'Listing'),
-      e('button',{key:'sh',title:'Share',style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:12}},'⤴'),
+      e('button',{key:'sh',onClick:handleShare,title:'Share',style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:12}},'⤴'),
       e('button',{key:'sv',onClick:()=>onSave(L.id),style:{background:C.cd,border:`1px solid ${saved?C.lm:C.bd}`,borderRadius:8,color:saved?C.lm:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:13}},'♥'),
+      e('button',{key:'mo',onClick:()=>setShowMenu(s=>!s),style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:13}},'⋯'),
+      showMenu&&e('div',{key:'mn',style:{position:'absolute',top:42,right:14,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:6,zIndex:10,minWidth:170}},[
+        isMyListing?[
+          e('button',{key:'ed',onClick:()=>{setShowMenu(false);setShowEditMsg(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✎ Edit listing'),
+          e('button',{key:'mk',onClick:()=>{setShowMenu(false);showToast&&showToast('Listing marked as sold');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✓ Mark as sold'),
+          e('button',{key:'dl',onClick:()=>{if(confirm('Delete this listing?')){setShowMenu(false);showToast&&showToast('Listing deleted');onBack();}},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'🗑 Delete'),
+        ]:[
+          e('button',{key:'sa',onClick:()=>{setShowMenu(false);handleStillAvailable();},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'❓ Still available?'),
+          e('button',{key:'sf',onClick:()=>{setShowMenu(false);onOpenSafety&&onOpenSafety();},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🛡️ Safe meet-up tips'),
+          e('button',{key:'rp',onClick:handleReport,style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'🚩 Report listing'),
+        ],
+      ]),
+      showEditMsg&&e('div',{key:'em',style:{position:'absolute',top:42,right:14,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:14,zIndex:10,minWidth:220}},[
+        e('div',{style:{fontSize:11,color:C.tx,marginBottom:8,lineHeight:1.5}},'Edit your listing from the Profile → Listed tab.'),
+        e('button',{onClick:()=>setShowEditMsg(false),style:{background:C.lm,color:'#fff',border:'none',borderRadius:8,padding:'5px 12px',fontSize:10,fontWeight:700,cursor:'pointer'}},'Got it'),
+      ]),
     ]),
     e('div',{key:'sc',style:{flex:1,overflowY:'auto',paddingBottom:sold?14:90}},[
       e('div',{key:'i',style:{height:200,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}},[
@@ -455,9 +482,9 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
           e('div',{style:{display:'flex',alignItems:'center',gap:10}},[
             e(Av,{u,sz:42}),
             e('div',{style:{flex:1}},[
-              e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',gap:3,background:C.lm+'18',color:C.lm,fontSize:8,fontWeight:800,borderRadius:6,padding:'2px 6px',border:`1px solid ${C.lm}40`}},['✓ Verified'])]),
-              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${u.rating} (${u.rev} reviews)`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
-              e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`📍 ${u.dist}mi · ⚡ ${u.resp} · 🏓 ${u.skill} · ${u.sales||0} sales`),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${u.rating} (${u.rev})`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`📍 ${u.dist}mi · ⚡ ${u.resp} · ${u.sales} sales`),
             ]),
           ]),
           u.id!==meId&&e('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.dm}`}},[
@@ -496,12 +523,12 @@ function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:16}},'←'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'Saved Listings'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${listings.length} saved · ${dropCt} drops · ${soldCt} sold`)])]),
     listings.length>0&&e('div',{key:'ft',style:{padding:'8px 14px',background:C.bg,borderBottom:`1px solid ${C.dm}`,display:'flex',gap:6}},['All','Available','Drops','Sold'].map(f=>e('button',{key:f,onClick:()=>setFilter(f),style:{padding:'4px 11px',borderRadius:10,border:`1px solid ${filter===f?C.lm:C.dm}`,background:filter===f?C.lm+'20':'transparent',color:filter===f?C.lm:C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},f))),
-    e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},listings.length===0?e('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:12}},[e('div',{style:{fontSize:48,opacity:.4}},'♥'),e('div',{style:{fontSize:16,fontWeight:800,color:C.tx}},'No saved listings yet'),e('div',{style:{fontSize:12,color:C.mt,textAlign:'center',maxWidth:220,lineHeight:1.5}},'Heart any listing to save it here')]):e('div',{style:{display:'flex',flexDirection:'column',gap:10}},shown.map(l=>{
+    e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},listings.length===0?e('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:12}},[e('div',{style:{fontSize:48,opacity:.4}},'♥'),e('div',{style:{fontSize:16,fontWeight:800,color:C.tx}},'Save listings to compare later'),e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5,marginBottom:6}},'Tap the heart on any listing. We\'ll notify you of price drops and when they sell.'),e('button',{onClick:onClose,style:{padding:'10px 18px',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff'}},'Browse Listings')]):e('div',{style:{display:'flex',flexDirection:'column',gap:10}},shown.map(l=>{
       const st=statusFor(l);
       const isSold=st.type==='sold';
       return e('div',{key:l.id,style:{background:C.cd,borderRadius:13,border:`1px solid ${st.type==='pricedrop'?C.lm+'40':st.type==='sold'?C.rd+'30':C.bd}`,overflow:'hidden',opacity:isSold?.65:1}},[
         e('div',{style:{padding:'5px 11px',background:st.type==='pricedrop'?C.lm+'15':st.type==='sold'?C.rd+'15':C.tl+'10',display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{width:5,height:5,borderRadius:'50%',background:st.col}}),e('span',{style:{fontSize:10,color:st.col,fontWeight:700}},st.label)])]),
-        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e('div',{style:{fontSize:22}},CI[l.cat])]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:8,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},l.model),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),l.type!=='trade'?e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`):e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Trade'),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
+        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e('div',{style:{fontSize:22}},CI[l.cat])]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},l.model),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),l.type!=='trade'?e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`):e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Trade'),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
       ]);
     }))),
   ]);
@@ -561,16 +588,22 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     refresh&&e('div',{key:'rf',style:{padding:'6px 0',textAlign:'center',background:C.sf,fontSize:10,color:C.lm,fontWeight:700}},'↻ Refreshing...'),
     e('div',{key:'h',style:{padding:'12px 14px 10px',background:C.sf}},[
       e('div',{key:'t',style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:11}},[
-        e('div',null,[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:9,padding:'3px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:800,letterSpacing:.5,cursor:'pointer'}},locMode==='local'?'📍 MARYVILLE · 25mi ⇅':'🌎 ANYWHERE ⇅'),e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},locMode==='local'?'Maryville':'Anywhere'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listings nearby · ${pool.filter(l=>l.ago.includes('h')||l.ago==='1d').length} new today`)]),
+        e('div',null,[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:9,padding:'3px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:800,letterSpacing:.5,cursor:'pointer'}},locMode==='local'?'📍 MARYVILLE · 25mi ⇅':'🌎 ANYWHERE ⇅'),e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},locMode==='local'?'Maryville':'Anywhere'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listing${pool.length===1?'':'s'} ${q?'matching your search':'nearby'}`)]),
         e('button',{onClick:()=>{setRefresh(true);setTimeout(()=>setRefresh(false),700);},style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:9,padding:'5px 9px',cursor:'pointer',color:C.mt,fontSize:13}},'↻'),
       ]),
       e('div',{key:'s',style:{position:'relative'}},[e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:11}},'🔍'),e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Search paddles, brands, players...',style:{width:'100%',padding:'9px 11px 9px 31px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
     ]),
+    q&&pool.length===0&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
+      e('div',{style:{fontSize:36,opacity:.4}},'🔍'),
+      e('div',{style:{fontSize:13,fontWeight:800,color:C.tx}},`No results for "${q}"`),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,maxWidth:240}},locMode==='local'?'Try expanding to Anywhere, or save a wishlist to be notified when matches appear.':'Try a different brand or model name.'),
+      locMode==='local'&&e('button',{onClick:onLocToggle,style:{padding:'7px 14px',borderRadius:10,background:C.lm+'15',border:`1px solid ${C.lm}40`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'🌎 Search Anywhere'),
+    ]),
     wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'⚡ Based on Your Wishlist',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e('div',{style:{fontSize:28}},'🔍'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e('span',{style:{color:C.tl,fontSize:18}},'›')])]),
     fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'👥 From People You Follow',sub:'Listings from your trusted network'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
     newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'🆕 New Near You',sub:'Freshly listed in your area'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'🔥 Trending This Week',sub:'Most viewed near you'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:8,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},l.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e('span',{style:{fontSize:8,color:C.mt}},`📍 ${l.dist}mi`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:8,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
-    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'✓ Just Sold Near You',sub:'Real transactions in your community'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:8,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:8,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e('div',{style:{fontSize:8,color:C.mt}},`📍 ${s.dist}mi · ${s.ago} ago`)])))]),
+    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'🔥 Trending This Week',sub:'Most viewed near you'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},l.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
+    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'✓ Just Sold Near You',sub:'Real transactions in your community'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e('div',{style:{fontSize:9,color:C.mt}},`📍 ${s.dist}mi · ${s.ago} ago`)])))]),
     e('div',{key:'cat',style:{paddingTop:16}},[e(SH,{title:'Shop by Category'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>{const ct=LS.filter(l=>l.cat===c.k.toLowerCase().replace('paddles','paddle').replace('bags','bag')).length;return e('div',{key:c.k,onClick:()=>onCatSelect(c.k),style:{flexShrink:0,width:108,height:128,borderRadius:13,background:`linear-gradient(160deg,${c.col}25,${c.col}08)`,border:`1px solid ${c.col}40`,padding:'12px 11px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between'}},[e('div',{style:{display:'flex',justifyContent:'space-between'}},[e('div',{style:{fontSize:34}},c.ic),e('div',{style:{fontSize:14,color:c.col,fontWeight:900}},'›')]),e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,marginBottom:1}},c.k),e('div',{style:{fontSize:9,color:C.mt}},`${ct} listings`)])]);}))]),
     e('div',{key:'br',style:{paddingTop:16,paddingBottom:18}},[e(SH,{title:'Popular Brands'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>{const ct=LS.filter(l=>l.brand===b.name).length;return e('div',{key:b.name,onClick:()=>onBrandSelect(b.name),style:{flexShrink:0,width:140,height:108,borderRadius:13,background:`linear-gradient(135deg,${b.col},${b.col}AA)`,padding:'11px 12px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between',position:'relative',overflow:'hidden'}},[e('div',{style:{position:'absolute',right:-12,bottom:-22,fontSize:80,opacity:.08,color:'#fff',fontWeight:900}},b.name.charAt(0)),e('div',{style:{position:'relative',zIndex:1}},[e('div',{style:{fontSize:14,fontWeight:900,color:'#fff',lineHeight:1.1,marginBottom:3}},b.name),e('div',{style:{fontSize:9,color:'#ffffffCC'}},b.sub)]),e('div',{style:{display:'flex',justifyContent:'space-between',position:'relative',zIndex:1}},[e('div',{style:{fontSize:10,color:'#fff',fontWeight:700,background:'rgba(0,0,0,0.25)',borderRadius:6,padding:'2px 7px'}},`${ct} items`),e('div',{style:{fontSize:14,color:'#fff',fontWeight:900}},'›')])]);}))]),
   ]);
@@ -618,7 +651,7 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
       e('div',{style:{width:60,height:60,background:C.sf,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:38}):e('div',{style:{fontSize:26}},CI[l.cat]),l.tag&&e('div',{style:{position:'absolute',top:-3,left:-3}},[e(TP,{t:l.tag})])]),
       e('div',{style:{flex:1,minWidth:0}},[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}},[e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},l.model)]),isTr?e('span',{style:{fontSize:10,fontWeight:800,color:C.tl,background:C.tl+'20',borderRadius:7,padding:'3px 8px',border:`1px solid ${C.tl}40`,flexShrink:0,marginLeft:8}},'🔄 TRADE'):e('span',{style:{fontSize:14,fontWeight:900,color:C.lm,flexShrink:0,marginLeft:8}},`$${l.price}`)]),
-        e('div',{style:{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},u.name.split(' ')[0]),u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓'),l.ago.includes('h')&&e('span',{style:{marginLeft:'auto',fontSize:8,color:C.lm,fontWeight:700}},`🆕 ${l.ago}`)]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},u.name.split(' ')[0]),u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓'),l.ago.includes('h')&&e('span',{style:{marginLeft:'auto',fontSize:9,color:C.lm,fontWeight:700}},`🆕 ${l.ago}`)]),
       ]),
       e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{width:30,height:30,borderRadius:'50%',background:isSv?C.lm+'20':C.sf,border:`1px solid ${isSv?C.lm:C.bd}`,color:isSv?C.lm:C.mt,fontSize:12,cursor:'pointer',flexShrink:0}},'♥'),
     ]);})),
@@ -636,8 +669,8 @@ function MatchOverlay({onClose,onChat}){
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[Hdr,
     e('div',{style:{flex:1,padding:14,display:'flex',alignItems:'center',justifyContent:'center'}},[
       e('div',{style:{background:C.cd,borderRadius:18,border:`2px solid ${C.bd}`,overflow:'hidden',width:'100%'}},[
-        e('div',{style:{padding:'12px 13px',display:'flex',alignItems:'center',gap:9,borderBottom:`1px solid ${C.dm}`}},[e(Av,{u:top.u,sz:38}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:700,color:C.tx}},top.u.name),e('div',{style:{fontSize:9,color:C.mt}},`🏓 ${top.u.skill} · 📍 ${top.dist}mi`)]),e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`${top.compat}%`),e('div',{style:{fontSize:7,color:C.mt}},'match')])]),
-        e('div',{style:{display:'grid',gridTemplateColumns:'1fr auto 1fr'}},[e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5}},[e('div',{style:{fontSize:7,color:C.mt,letterSpacing:1}},'YOU HAVE'),e(PSv,{col:ccol(top.yh.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},top.yh.brand),e('div',{style:{fontSize:10,color:C.tx}},top.yh.model)]),e('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,color:C.lm}},'⇄'),e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5,background:C.sf}},[e('div',{style:{fontSize:7,color:C.mt,letterSpacing:1}},'THEY HAVE'),e(PSv,{col:ccol(top.th.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.tl,fontWeight:800}},top.th.brand),e('div',{style:{fontSize:10,color:C.tx}},top.th.model)])]),
+        e('div',{style:{padding:'12px 13px',display:'flex',alignItems:'center',gap:9,borderBottom:`1px solid ${C.dm}`}},[e(Av,{u:top.u,sz:38}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:700,color:C.tx}},top.u.name),e('div',{style:{fontSize:9,color:C.mt}},`🏓 ${top.u.skill} · 📍 ${top.dist}mi`)]),e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`${top.compat}%`),e('div',{style:{fontSize:9,color:C.mt}},'match')])]),
+        e('div',{style:{display:'grid',gridTemplateColumns:'1fr auto 1fr'}},[e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5}},[e('div',{style:{fontSize:9,color:C.mt,letterSpacing:1}},'YOU HAVE'),e(PSv,{col:ccol(top.yh.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},top.yh.brand),e('div',{style:{fontSize:10,color:C.tx}},top.yh.model)]),e('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,color:C.lm}},'⇄'),e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5,background:C.sf}},[e('div',{style:{fontSize:9,color:C.mt,letterSpacing:1}},'THEY HAVE'),e(PSv,{col:ccol(top.th.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.tl,fontWeight:800}},top.th.brand),e('div',{style:{fontSize:10,color:C.tx}},top.th.model)])]),
       ]),
     ]),
     e('div',{style:{padding:'11px 24px',display:'flex',gap:18,justifyContent:'center',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:pass,style:{width:50,height:50,borderRadius:'50%',background:C.cd,border:`2px solid ${C.rd}`,cursor:'pointer',fontSize:18,color:C.rd}},'✕'),e('button',{onClick:like,style:{width:50,height:50,borderRadius:'50%',background:C.ok+'20',border:`2px solid ${C.ok}`,cursor:'pointer',fontSize:18,color:C.ok}},'♥')]),
@@ -646,11 +679,11 @@ function MatchOverlay({onClose,onChat}){
 
 function MsgCard({m,onAccept,onDecline,onCounter}){
   const isMine=m.f==='m';
-  if(m.kind==='text')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'76%',padding:'7px 11px',borderRadius:13,background:isMine?C.lm:C.cd,color:isMine?'#fff':C.tx,fontSize:12,lineHeight:1.4,borderBottomRightRadius:isMine?2:13,borderBottomLeftRadius:isMine?13:2}},[m.msg,e('div',{style:{fontSize:8,opacity:.5,marginTop:2}},m.t)])]);
-  if(m.kind==='offer'){const otherPrice=m.listingRef.p||0;const diff=otherPrice-m.amount;return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.am+'15',borderRadius:13,border:`1.5px solid ${C.am}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.am+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'💰'),e('span',{style:{fontSize:9,color:C.am,fontWeight:800,letterSpacing:.5}},`OFFER · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:6}},[e('span',{style:{fontSize:20,fontWeight:900,color:C.am}},`$${m.amount}`),e('span',{style:{fontSize:9,color:C.mt}},`from $${otherPrice}`),e('span',{style:{fontSize:9,color:C.ok,fontWeight:700}},`(-$${diff})`)]),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5,marginTop:7}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff'}},'✓ Accept'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.rd}},'Decline'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.tx}},'Counter')]),e('div',{style:{fontSize:8,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);}
-  if(m.kind==='buynow')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.lm+'12',borderRadius:13,border:`1.5px solid ${C.lm}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.lm+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'⚡'),e('span',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5}},`BUY NOW · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:11,color:C.tx,marginBottom:5}},'Buyer wants to purchase at full price'),e('div',{style:{fontSize:22,fontWeight:900,color:C.lm,marginBottom:6}},`$${m.amount}`),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'7px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'✓ Accept Sale'),e('button',{style:{padding:'7px 14px',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:11,fontWeight:700,color:C.rd}},'Decline')]),e('div',{style:{fontSize:8,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);
+  if(m.kind==='text')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'76%',padding:'7px 11px',borderRadius:13,background:isMine?C.lm:C.cd,color:isMine?'#fff':C.tx,fontSize:12,lineHeight:1.4,borderBottomRightRadius:isMine?2:13,borderBottomLeftRadius:isMine?13:2}},[m.msg,e('div',{style:{fontSize:9,opacity:.5,marginTop:2,display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3}},[m.t,isMine&&e('span',{style:{fontSize:10}},m.read?'✓✓':'✓')])])]);
+  if(m.kind==='offer'){const otherPrice=m.listingRef.p||0;const diff=otherPrice-m.amount;return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.am+'15',borderRadius:13,border:`1.5px solid ${C.am}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.am+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'💰'),e('span',{style:{fontSize:9,color:C.am,fontWeight:800,letterSpacing:.5}},`OFFER · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:6}},[e('span',{style:{fontSize:20,fontWeight:900,color:C.am}},`$${m.amount}`),e('span',{style:{fontSize:9,color:C.mt}},`from $${otherPrice}`),e('span',{style:{fontSize:9,color:C.ok,fontWeight:700}},`(-$${diff})`)]),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5,marginTop:7}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff'}},'✓ Accept'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.rd}},'Decline'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.tx}},'Counter')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);}
+  if(m.kind==='buynow')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.lm+'12',borderRadius:13,border:`1.5px solid ${C.lm}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.lm+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'⚡'),e('span',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5}},`BUY NOW · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:11,color:C.tx,marginBottom:5}},'Buyer wants to purchase at full price'),e('div',{style:{fontSize:22,fontWeight:900,color:C.lm,marginBottom:6}},`$${m.amount}`),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'7px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'✓ Accept Sale'),e('button',{style:{padding:'7px 14px',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:11,fontWeight:700,color:C.rd}},'Decline')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);
   if(m.kind==='accept')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.ok+'15',borderRadius:11,padding:'8px 13px',border:`1px solid ${C.ok}40`,textAlign:'center'}},[e('div',{style:{fontSize:10,fontWeight:800,color:C.ok}},'✓ DEAL ACCEPTED'),e('div',{style:{fontSize:11,color:C.tx,fontWeight:600,marginTop:2}},`$${m.amount} · ${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},'Coordinate meet-up & payment below')])]);
-  if(m.kind==='payment')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.tl+'15',borderRadius:13,border:`1.5px solid ${C.tl}50`,padding:'9px 11px'}},[e('div',{style:{fontSize:9,color:C.tl,fontWeight:800,letterSpacing:.5,marginBottom:4}},`💸 SENT VIA ${m.method.toUpperCase()}`),e('div',{style:{fontSize:14,fontWeight:900,color:C.tx}},`$${m.amount}`),e('div',{style:{fontSize:9,color:C.mt}},`To ${m.handle}`),e('div',{style:{fontSize:8,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])]);
+  if(m.kind==='payment')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.tl+'15',borderRadius:13,border:`1.5px solid ${C.tl}50`,padding:'9px 11px'}},[e('div',{style:{fontSize:9,color:C.tl,fontWeight:800,letterSpacing:.5,marginBottom:4}},`💸 SENT VIA ${m.method.toUpperCase()}`),e('div',{style:{fontSize:14,fontWeight:900,color:C.tx}},`$${m.amount}`),e('div',{style:{fontSize:9,color:C.mt}},`To ${m.handle}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])]);
   return null;
 }
 
@@ -666,11 +699,14 @@ function PaymentSheet({onClose,onSend,amount,seller}){
   ]);
 }
 
-function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
+function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,onOpenReview}){
   const [reply,setReply]=useState('');
   const [paySheet,setPaySheet]=useState(false);
+  const [showConvMenu,setShowConvMenu]=useState(false);
+  const [showSafety,setShowSafety]=useState(false);
   const endR=useRef(null);
   useEffect(()=>{if(endR.current)endR.current.scrollIntoView({behavior:'smooth'});},[activeIdx,msgs]);
+  useEffect(()=>{setShowConvMenu(false);},[activeIdx]);
   // Mark messages as read when thread opens
   useEffect(()=>{
     if(activeIdx==null||!meId)return;
@@ -680,7 +716,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
       setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,unread:0}));
     }
   },[activeIdx,meId]);
-  const QR=['Still available?','What\'s your best price?','Can you meet up?','Can you ship?'];
+  const QR=['Still available?','Can you meet up?','Best price?'];
   if(activeIdx!==null){
     const th=msgs[activeIdx];
     const send=async(m)=>{
@@ -719,19 +755,36 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh}){
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
     return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
       paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu}),
-      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:16}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',background:C.lm+'18',color:C.lm,fontSize:8,fontWeight:800,borderRadius:6,padding:'1px 5px',border:`1px solid ${C.lm}40`}},'✓ Verified')]),e('div',{style:{display:'flex',alignItems:'center',gap:5,marginTop:1}},[e(Cred,{u:th.wu,compact:false}),e('span',{style:{fontSize:9,color:C.mt}},`· ${th.wu.dist}mi · ${th.wu.lastActive}`)])])]),
-      e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e('span',{style:{fontSize:15}},'🔥'):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:8,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} ⇄ trade`:th.ref.m)]),th.dealStatus==='accepted'&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'✓ ACCEPTED')]),
+      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:18,lineHeight:1}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},style:{background:'transparent',border:'none',cursor:'pointer',fontSize:18,color:C.mt,padding:'4px 8px'}},'⋯')]),
+      showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
+        e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🛡️ Safe meet-up tips'),
+        e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('User reported. Thanks for keeping DINK safe.');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🚩 Report user'),
+        e('button',{onClick:()=>{setShowConvMenu(false);if(confirm('Block this user? They won\'t be able to message or see your listings.')){showToast&&showToast('User blocked');setActiveIdx(null);}},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'⛔ Block user'),
+      ]),
+      showSafety&&e(SafetyTipsModal,{key:'safety',onClose:()=>setShowSafety(false)}),
+      e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e('span',{style:{fontSize:15}},'🔥'):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} ⇄ trade`:th.ref.m)]),th.dealStatus==='accepted'&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'✓ ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer})),e('div',{key:'end',ref:endR})]),
-      showSendPay&&e('div',{key:'pay',style:{padding:'8px 12px',background:C.cta+'10',borderTop:`1px solid ${C.cta}30`}},[e('button',{onClick:()=>setPaySheet(true),style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.cta,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`💸 Send Payment · $${lastAccept?.amount||0}`)]),
+      th.dealStatus==='accepted'&&th.cv.some(c=>c.kind==='payment')&&e('div',{key:'cmpl',style:{padding:'8px 12px',background:C.ok+'10',borderTop:`1px solid ${C.ok}30`}},[
+        e('button',{onClick:()=>{onOpenReview&&onOpenReview(th.ref,th.wu);},style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.ok,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff'}},'✓ Mark deal complete & leave review'),
+      ]),
+      showSendPay&&e('div',{key:'pay',style:{padding:'8px 12px',background:C.lm+'10',borderTop:`1px solid ${C.lm}30`}},[e('button',{onClick:()=>setPaySheet(true),style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`💸 Send Payment · $${lastAccept?.amount||0}`)]),
       !showSendPay&&e('div',{key:'qr',style:{padding:'5px 12px',display:'flex',gap:5,overflowX:'auto'}},QR.map(q=>e('button',{key:q,onClick:()=>send(q),style:{padding:'5px 10px',borderRadius:13,border:`1px solid ${C.bd}`,background:C.cd,color:C.mt,fontSize:10,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}},q))),
-      e('div',{key:'in',style:{padding:'8px 12px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7}},[e('input',{value:reply,onChange:ev=>setReply(ev.target.value),onKeyDown:ev=>ev.key==='Enter'&&send(),placeholder:'Message...',style:{flex:1,padding:'7px 12px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:18,color:C.tx,fontSize:12,outline:'none'}}),e('button',{onClick:()=>send(),style:{width:36,height:36,borderRadius:'50%',background:C.lm,border:'none',cursor:'pointer',fontSize:14,fontWeight:900}},'↑')]),
+      e('div',{key:'in',style:{padding:'8px 12px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7,alignItems:'center'}},[
+        e('button',{key:'att',onClick:()=>showToast&&showToast('Photo sharing coming soon'),style:{width:32,height:32,borderRadius:'50%',background:'transparent',border:'none',cursor:'pointer',fontSize:16,color:C.mt}},'📎'),
+        e('input',{key:'ip',value:reply,onChange:ev=>setReply(ev.target.value),onKeyDown:ev=>ev.key==='Enter'&&send(),placeholder:'Message...',style:{flex:1,padding:'7px 12px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:18,color:C.tx,fontSize:12,outline:'none'}}),
+        e('button',{key:'sb',onClick:()=>send(),style:{width:36,height:36,borderRadius:'50%',background:C.lm,border:'none',cursor:'pointer',fontSize:14,fontWeight:900,color:'#fff'}},'↑'),
+      ]),
     ]);
   }
   return e('div',{style:{flex:1,overflowY:'auto'}},[
     e('div',{key:'h',style:{padding:'12px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{fontSize:18,fontWeight:900,color:C.tx}},'Messages'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${msgs.filter(m=>m.unread>0).length} unread · ${msgs.length} conversations`)]),
-    e('div',{key:'l'},msgs.map((th,idx)=>e('div',{key:th.id,onClick:()=>setActiveIdx(idx),style:{padding:'11px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:10,background:th.unread>0?C.lm+'08':'transparent'}},[
-      e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,fontWeight:900,color:'#fff'}},th.unread),th.isM&&e('div',{style:{position:'absolute',bottom:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,border:`1.5px solid ${C.bg}`}},'🔥')]),
-      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.lm:th.isM?C.lm:C.lm+'AA',fontWeight:700,marginBottom:2}},`${th.isM?'🔥 Trade: ':th.dealStatus==='accepted'?'✓ Deal: ':'Re: '}${th.ref.b} ${th.ref.m}`),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginBottom:3}},th.last),e(Cred,{u:th.wu,compact:true})]),
+    msgs.length===0?e('div',{key:'em',style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'60px 20px',gap:10}},[
+      e('div',{style:{fontSize:42,opacity:.5}},'💬'),
+      e('div',{style:{fontSize:14,fontWeight:800,color:C.tx}},'No conversations yet'),
+      e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5}},'Reach out to a seller on any listing to start a conversation.'),
+    ]):e('div',{key:'l'},msgs.map((th,idx)=>e('div',{key:th.id,onClick:()=>setActiveIdx(idx),style:{padding:'11px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:10,background:th.unread>0?C.lm+'08':'transparent'}},[
+      e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900,color:'#fff'}},th.unread),th.isM&&e('div',{style:{position:'absolute',bottom:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,border:`1.5px solid ${C.bg}`}},'🔥')]),
+      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.ok:C.lm,fontWeight:700,marginBottom:2,display:'flex',alignItems:'center',gap:4}},[th.dealStatus==='accepted'&&e('span',{style:{background:C.ok+'18',color:C.ok,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'DEAL'),th.isM&&e('span',{style:{background:C.lm+'18',color:C.lm,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'TRADE'),e('span',{style:{color:C.mt,fontWeight:500}},`${th.ref.b} ${th.ref.m}`)]),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},th.last)]),
     ]))),
   ]);
 }
@@ -764,7 +817,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow}){
+function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
@@ -825,8 +878,6 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
   const tradeReady=gear.filter(g=>g.w.includes('trade')).length>0&&wish.length>0;
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
-  const wishMatchCt=findWishMatches().length;
-  const gearForSaleCt=gear.filter(g=>g.w.length>0).length;
   const priceDrop=saved.filter(id=>{
     const L=LS.find(l=>l.id===id);
     const meta=savedMeta&&savedMeta[id];
@@ -837,42 +888,97 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
     showAddGear&&e(AddPaddleModal,{key:'agm',mode:'gear',onClose:()=>setShowAddGear(false),onAdd:addGear}),
     showAddWish&&e(AddPaddleModal,{key:'awm',mode:'wish',onClose:()=>setShowAddWish(false),onAdd:addWish}),
     e('div',{key:'main',style:{flex:1,overflowY:'auto'}},[
-    e('div',{key:'h',style:{background:C.sf,padding:'13px 14px 11px',position:'relative'}},[
-      e('button',{onClick:onOpenSettings,style:{position:'absolute',top:11,right:13,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:'50%',width:30,height:30,cursor:'pointer',color:C.mt,fontSize:13}},'⚙'),
-      e('div',{style:{display:'flex',alignItems:'flex-start',gap:12,marginBottom:11}},[
-        e(Av,{u:M,sz:64,edit:true}),
-        e('div',{style:{flex:1,minWidth:0,paddingRight:30}},[
-          e('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:2,flexWrap:'wrap'}},[e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},M.name),M.vfd&&e('span',{title:'Verified seller',style:{display:'inline-flex',alignItems:'center',gap:3,background:C.lm+'18',color:C.lm,fontSize:9,fontWeight:800,borderRadius:7,padding:'2px 7px',border:`1px solid ${C.lm}40`}},['✓ Verified'])]),
-          e('div',{style:{fontSize:10,color:C.mt,marginBottom:5}},`📍 ${M.loc} · Since ${M.since}`),
-          e('div',{style:{display:'inline-flex',alignItems:'center',gap:5,background:C.pu+'20',border:`1px solid ${C.pu}40`,borderRadius:7,padding:'3px 9px'}},[e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,letterSpacing:.3}},'🏓 DUPR'),e('span',{style:{fontSize:11,color:C.pu,fontWeight:900}},M.skill)]),
-          e('div',{style:{display:'flex',gap:5,flexWrap:'wrap',marginTop:6}},M.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'20',borderRadius:8,padding:'2px 7px',border:`1px solid ${C.tl}30`}},b))),
+    e('div',{key:'h',style:{background:C.sf,padding:'14px 14px 12px'}},[
+      // Top bar
+      e('div',{key:'topbar',style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}},[
+        e('span',{style:{fontSize:15,fontWeight:900,color:C.tx}},'My Profile'),
+        e('button',{onClick:onOpenSettings,style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,fontSize:18,lineHeight:1,padding:0}},'⚙'),
+      ]),
+      // Instagram-style: avatar + stats in one row
+      e('div',{key:'igrow',style:{display:'flex',alignItems:'center',gap:18,marginBottom:12}},[
+        e(Av,{u:M,sz:76,edit:true}),
+        e('div',{style:{flex:1}},[
+          e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:10}},[
+            e('span',{style:{fontSize:17,fontWeight:900,color:C.tx}},M.name),
+            M.vfd&&e('span',{style:{fontSize:11,color:C.lm}},'✓'),
+          ]),
+          e('div',{style:{display:'flex'}},[
+            e('div',{style:{flex:1,textAlign:'center'}},[
+              e('div',{style:{fontSize:16,fontWeight:800,color:C.tx}},M.sales),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Sales'),
+            ]),
+            e('button',{onClick:()=>setTab('community'),style:{flex:1,textAlign:'center',background:'none',border:'none',cursor:'pointer',padding:0}},[
+              e('div',{style:{fontSize:16,fontWeight:800,color:C.tx}},(followers||[]).length),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Followers'),
+            ]),
+            e('button',{onClick:()=>setTab('community'),style:{flex:1,textAlign:'center',background:'none',border:'none',cursor:'pointer',padding:0}},[
+              e('div',{style:{fontSize:16,fontWeight:800,color:C.tx}},(following||[]).length),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Following'),
+            ]),
+          ]),
         ]),
       ]),
-      e('div',{key:'bio',style:{background:C.cd,borderRadius:12,padding:11,marginBottom:10,border:`1px solid ${C.bd}`,position:'relative'}},[e('button',{style:{position:'absolute',top:8,right:8,background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:'pointer',padding:0}},'✎ Edit'),e('div',{style:{fontSize:12,color:C.tx,lineHeight:1.55,paddingRight:36}},M.bio)]),
-      tradeReady&&e('div',{key:'tm',onClick:onOpenMatches,style:{background:`linear-gradient(135deg,${C.lm}20,${C.tl}15)`,borderRadius:12,padding:11,marginBottom:10,border:`1px solid ${C.lm}40`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[e('div',{style:{fontSize:22}},'🔥'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.lm}},`${TM.length} Trade Matches`),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},'Players who want yours and have what you want')]),e('span',{style:{fontSize:18,color:C.lm}},'›')]),
-      e('div',{key:'st',style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}},[
-        e('div',{style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center'}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tx}},M.sales),e('div',{style:{fontSize:8,color:C.mt,marginTop:1}},'Sales')]),
-        e('button',{onClick:()=>setTab('listings'),style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center',border:'none',cursor:'pointer'}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tx}},activeCt),e('div',{style:{fontSize:8,color:C.mt,marginTop:1}},'Active')]),
-        e('button',{onClick:onOpenSaved,style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center',border:`1px solid ${priceDrop>0?C.lm+'40':C.bd}`,cursor:'pointer',position:'relative'}},[priceDrop>0&&e('div',{style:{position:'absolute',top:-3,right:-3,width:8,height:8,borderRadius:'50%',background:C.lm,border:`1.5px solid ${C.sf}`}}),e('div',{style:{fontSize:13,fontWeight:800,color:C.lm}},savedCt),e('div',{style:{fontSize:8,color:C.lm,marginTop:1,fontWeight:700}},'♥ Saved')]),
+      // Meta row: location + DUPR + badges
+      e('div',{key:'meta',style:{marginBottom:10}},[
+        e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:M.bdg.length>0?6:0}},[
+          e('span',{style:{fontSize:10,color:C.mt}},`📍 ${M.loc} · Since ${M.since}`),
+          e('div',{style:{display:'inline-flex',alignItems:'center',gap:4,background:C.pu+'15',borderRadius:6,padding:'2px 8px'}},[
+            e('span',{style:{fontSize:9,color:C.pu,fontWeight:800}},'🏓 DUPR'),
+            e('span',{style:{fontSize:10,color:C.pu,fontWeight:900}},M.skill),
+          ]),
+        ]),
+        M.bdg.length>0&&e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},M.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'15',borderRadius:8,padding:'2px 7px',border:`1px solid ${C.tl}25`}},b))),
       ]),
-      e('div',{key:'sc',style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}},[
-        e('button',{onClick:()=>setTab('community'),style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center',border:`1px solid ${C.bd}`,cursor:'pointer'}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.pu}},(followers||[]).length),e('div',{style:{fontSize:8,color:C.mt,marginTop:1}},'👥 Followers')]),
-        e('button',{onClick:()=>setTab('community'),style:{background:C.cd,borderRadius:9,padding:'7px 5px',textAlign:'center',border:`1px solid ${C.bd}`,cursor:'pointer'}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.pu}},(following||[]).length),e('div',{style:{fontSize:8,color:C.mt,marginTop:1}},'👥 Following')]),
+      // Bio — subtle background, inline edit
+      e('div',{key:'bio',style:{background:C.dm,borderRadius:10,padding:'9px 11px',marginBottom:10,display:'flex',alignItems:'flex-start',gap:8}},[
+        e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.55,flex:1}},M.bio),
+        e('button',{style:{background:'transparent',border:'none',color:C.mt,fontSize:10,cursor:'pointer',flexShrink:0,padding:0,marginTop:1}},'✎'),
+      ]),
+      // Trade matches (only when ready)
+      tradeReady&&e('div',{key:'tm',onClick:onOpenMatches,style:{background:`linear-gradient(135deg,${C.lm}12,${C.tl}08)`,borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.lm}25`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
+        e('div',{style:{fontSize:20}},'🔥'),
+        e('div',{style:{flex:1}},[
+          e('div',{style:{fontSize:12,fontWeight:800,color:C.lm}},`${TM.length} Trade Matches`),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Players who want yours & have what you want'),
+        ]),
+        e('span',{style:{fontSize:16,color:C.lm}},'›'),
+      ]),
+      // Bottom stats: Active Listings | Saved
+      e('div',{key:'st',style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},[
+        e('button',{onClick:()=>setTab('listings'),style:{background:C.cd,borderRadius:9,padding:'8px 5px',textAlign:'center',border:`1px solid ${C.bd}`,cursor:'pointer'}},[
+          e('div',{style:{fontSize:14,fontWeight:800,color:C.tx}},activeCt),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Active Listings'),
+        ]),
+        e('button',{onClick:onOpenSaved,style:{background:C.cd,borderRadius:9,padding:'8px 5px',textAlign:'center',border:`1px solid ${priceDrop>0?C.lm+'40':C.bd}`,cursor:'pointer',position:'relative'}},[
+          priceDrop>0&&e('div',{style:{position:'absolute',top:-3,right:-3,width:8,height:8,borderRadius:'50%',background:C.lm,border:`1.5px solid ${C.sf}`}}),
+          e('div',{style:{fontSize:14,fontWeight:800,color:C.lm}},savedCt),
+          e('div',{style:{fontSize:9,color:C.lm,marginTop:1,fontWeight:700}},'♥ Saved'),
+        ]),
       ]),
     ]),
-    e('div',{key:'tabs',style:{display:'flex',background:C.sf,borderBottom:`1px solid ${C.dm}`,position:'sticky',top:0,zIndex:5}},[['gear','🏓','Gear',gearForSaleCt],['wishlist','🔍','Wishlist',wishMatchCt],['listings','📦','Listed',0],['community','👥','Community',0]].map(([t,ic,lbl,badge])=>e('button',{key:t,onClick:()=>setTab(t),style:{flex:1,padding:'11px 0 9px',border:'none',background:'transparent',borderBottom:`2px solid ${tab===t?C.lm:'transparent'}`,color:tab===t?C.lm:C.mt,fontSize:12,fontWeight:700,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:2,position:'relative'}},[e('span',{key:'i',style:{fontSize:15}},ic),e('span',{key:'l',style:{fontSize:10,fontWeight:tab===t?800:600}},lbl),badge>0&&e('span',{key:'b',style:{position:'absolute',top:4,right:'25%',minWidth:14,height:14,borderRadius:7,background:t==='wishlist'?C.cta:C.lm,color:'#fff',fontSize:8,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px',border:`1.5px solid ${C.sf}`}},badge)]))),
+    e('div',{key:'tabs',style:{display:'flex',background:C.sf,borderBottom:`1px solid ${C.dm}`,paddingTop:2}},['gear','wishlist','listings','community'].map(t=>e('button',{key:t,onClick:()=>setTab(t),style:{flex:1,padding:'11px 0',border:'none',background:'transparent',borderBottom:`2px solid ${tab===t?C.lm:'transparent'}`,color:tab===t?C.lm:C.mt,fontSize:12,fontWeight:tab===t?800:500,cursor:'pointer'}},t==='gear'?'Gear':t==='wishlist'?'Wishlist':t==='listings'?'Listed':'Community'))),
     e('div',{key:'c',style:{padding:13}},[
       tab==='gear'&&e('div',null,[
         e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:9}},'MY PADDLE INVENTORY'),
+        gear.length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.bd}`,marginBottom:10}},[
+          e('div',{style:{fontSize:32,marginBottom:8,opacity:.5}},'🏓'),
+          e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,marginBottom:4}},'Build your paddle collection'),
+          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto',lineHeight:1.5}},'Add paddles you own to unlock trade matches and track their value.'),
+        ]),
         gear.map(g=>e('div',{key:g.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:11,marginBottom:9}},[
           e('div',{style:{display:'flex',alignItems:'center',gap:9,marginBottom:9}},[e(PSv,{col:ccol(g.cond)+'60',sz:34}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},g.brand),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx}},g.model),e(CB,{c:g.cond})]),g.p&&e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${g.p}`)]),
           e('div',{style:{display:'flex',gap:6}},[e('button',{onClick:()=>togW(g.id,'sell'),style:{flex:1,padding:'5px 0',borderRadius:8,border:`1px solid ${g.w.includes('sell')?C.lm:C.dm}`,background:g.w.includes('sell')?C.lm+'20':'transparent',color:g.w.includes('sell')?C.lm:C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},`🏷️ ${g.w.includes('sell')?'For Sale':'Sell?'}`),e('button',{onClick:()=>togW(g.id,'trade'),style:{flex:1,padding:'5px 0',borderRadius:8,border:`1px solid ${g.w.includes('trade')?C.tl:C.dm}`,background:g.w.includes('trade')?C.tl+'20':'transparent',color:g.w.includes('trade')?C.tl:C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},`🔄 ${g.w.includes('trade')?'Trading':'Trade?'}`)]),
         ])),
-        e('button',{onClick:()=>setShowAddGear(true),style:{width:'100%',marginTop:6,padding:'12px 0',borderRadius:11,border:'none',background:C.cta,color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer'}},'+ Add Paddle to Gear'),
+        e('button',{onClick:()=>setShowAddGear(true),style:{width:'100%',marginTop:6,padding:'12px 0',borderRadius:11,border:'none',background:C.lm,color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer'}},'+ Add Paddle to Gear'),
       ]),
       tab==='wishlist'&&e('div',null,[
         e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:3}},"PADDLES I'M LOOKING FOR"),
-        e('div',{style:{fontSize:10,color:C.lm,marginBottom:10}},`🔔 Notified when these list — ${wish.length} active`),
+        wish.length>0&&e('div',{style:{fontSize:10,color:C.lm,marginBottom:10}},`🔔 Notified when these list — ${wish.length} active`),
+        wish.length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.tl}50`,marginBottom:10,marginTop:6}},[
+          e('div',{style:{fontSize:32,marginBottom:8,opacity:.5}},'🔍'),
+          e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,marginBottom:4}},'Set it and forget it'),
+          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto',lineHeight:1.5}},'Add paddles you want — we\'ll notify you the moment matches list nearby.'),
+        ]),
         wish.map((w,i)=>e('div',{key:w.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.tl}40`,padding:11,display:'flex',alignItems:'center',gap:9,marginBottom:9}},[
           e('div',{style:{width:24,height:24,borderRadius:'50%',background:C.tl+'30',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:900,color:C.tl,flexShrink:0}},i+1),
           e(PSv,{col:C.tl+'50',sz:30}),
@@ -882,15 +988,29 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         e('button',{onClick:()=>setShowAddWish(true),style:{width:'100%',marginTop:6,padding:'12px 0',borderRadius:11,border:`2px dashed ${C.tl}50`,background:'transparent',color:C.tl,fontSize:11,cursor:'pointer',fontWeight:700}},'+ Add to Wishlist'),
       ]),
       tab==='listings'&&e('div',null,[
-        e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'ACTIVE LISTINGS'),
+        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},[
+          e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5}},'ACTIVE LISTINGS'),
+          MY_LS.filter(l=>l.active).length>0&&e('button',{onClick:onCreate,style:{background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'+ New listing'),
+        ]),
+        MY_LS.filter(l=>l.active).length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.bd}`,marginBottom:10}},[
+          e('div',{style:{fontSize:32,marginBottom:8,opacity:.5}},'📦'),
+          e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,marginBottom:4}},'No active listings'),
+          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto 10px',lineHeight:1.5}},'List your unused paddles to earn money or trade for new ones.'),
+          e('button',{onClick:onCreate,style:{padding:'8px 16px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'+ Post a Listing'),
+        ]),
         MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.lm}40`,padding:9,marginBottom:8}},[
-          e('div',{onClick:()=>onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[e(PSv,{col:C.lm+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:8,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})])]),
-          e('div',{style:{display:'flex',gap:5}},[e('button',{style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'✎ Edit'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'⏸ Pause'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer'}},'🗑 Delete')]),
+          e('div',{onClick:()=>onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[e(PSv,{col:C.lm+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})])]),
+          l.views>30&&l.saves===0&&e('div',{style:{fontSize:9,color:C.am,background:C.am+'15',padding:'5px 8px',borderRadius:7,marginBottom:6,lineHeight:1.4}},'💡 High views but no saves — try lowering the price to attract offers'),
+          e('div',{style:{display:'flex',gap:5}},[
+            e('button',{onClick:()=>showToast&&showToast('Edit listing coming soon — for now, delete and re-post'),style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'✎ Edit'),
+            e('button',{onClick:()=>showToast&&showToast('Listing paused — hidden from buyers'),style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'⏸ Pause'),
+            e('button',{onClick:()=>{if(confirm('Delete this listing? This cannot be undone.')){showToast&&showToast('Listing deleted');}},style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer'}},'🗑 Delete'),
+          ]),
         ])),
-        e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginTop:14,marginBottom:8}},'SOLD'),
+        MY_LS.filter(l=>!l.active).length>0&&e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginTop:14,marginBottom:8}},'SOLD'),
         MY_LS.filter(l=>!l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.dm}`,padding:9,marginBottom:8}},[
-          e('div',{style:{display:'flex',gap:9,alignItems:'center',marginBottom:6}},[e(PSv,{col:C.mt+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:8,color:C.mt,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Sold ${l.soldDate} to ${l.soldTo}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${l.soldPrice}`),e('div',{style:{fontSize:9,color:C.ok,fontWeight:700}},'✓ SOLD')])]),
-          e('button',{style:{width:'100%',padding:'6px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'↻ Relist'),
+          e('div',{style:{display:'flex',gap:9,alignItems:'center',marginBottom:6}},[e(PSv,{col:C.mt+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Sold ${l.soldDate} to ${l.soldTo}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${l.soldPrice}`),e('div',{style:{fontSize:9,color:C.ok,fontWeight:700}},'✓ SOLD')])]),
+          e('button',{onClick:()=>showToast&&showToast('Relisting form prefilled — review and post'),style:{width:'100%',padding:'6px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'↻ Relist'),
         ])),
       ]),
       tab==='community'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
@@ -922,11 +1042,7 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
     fontSize:11,fontWeight:700,cursor:'pointer',padding:'7px 10px',borderRadius:9,flexShrink:0,
   };
   return e('div',null,[
-    e('div',{key:'hdr',style:{background:C.pu+'10',border:`1px solid ${C.pu}30`,borderRadius:11,padding:11,marginBottom:10,display:'flex',alignItems:'center',gap:10}},[
-      e('div',{style:{fontSize:20}},'🤝'),
-      e('div',{style:{flex:1}},[e('div',{style:{fontSize:11,fontWeight:800,color:C.pu}},'Grow your network'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1,lineHeight:1.4}},`${mutualCt} mutual connection${mutualCt===1?'':'s'} — buyers prefer sellers they know`)]),
-    ]),
-    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${sub===k?C.pu:C.dm}`,background:sub===k?C.pu+'20':'transparent',color:sub===k?C.pu:C.mt}},`${l} · ${n}`))),
+    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${sub===k?C.pu:C.dm}`,background:sub===k?C.pu+'15':'transparent',color:sub===k?C.pu:C.mt}},`${l} ${n}`))),
     e('div',{key:'srch',style:{position:'relative',marginBottom:11}},[
       e('span',{style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',fontSize:11}},'🔍'),
       e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:sub==='activity'?'Search activity...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
@@ -952,8 +1068,8 @@ function ActivityFeed({items,onView,emptyMsg}){
     e('span',{key:'g',style:{fontSize:14,color:C.mt}},'›'),
   ])));}
 
-function CrtOverlay({onClose,onPost}){
-  const [f,setF]=useState({cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false});
+function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide}){
+  const [f,setF]=useState({cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true});
   const [busy,setBusy]=useState(false);
   const [photos,setPhotos]=useState([]); // [{file, preview}]
   const fileRef=useRef(null);
@@ -971,38 +1087,63 @@ function CrtOverlay({onClose,onPost}){
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
   const LS={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
-  const valid=f.brand&&f.model&&f.price&&f.desc;
+  const valid=f.brand&&f.model&&f.price&&f.desc&&photos.length>0;
   const pdata=f.cat==='paddle'?pdbGet(f.brand,f.model):null;
+  const handlePost=async()=>{
+    if(!valid||busy)return;
+    setBusy(true);
+    try{
+      await onPost(f,photos.map(p=>p.file));
+      showToast&&showToast('🎉 Listing posted successfully!');
+    }catch(err){
+      showError&&showError('Failed to post listing. Please try again.');
+    }
+    setBusy(false);
+  };
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:18}},'✕'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'List Your Item'),e('div',{style:{fontSize:9,color:C.lm,marginTop:1}},'📍 Maryville · 25mi visibility')])]),
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14,display:'flex',flexDirection:'column',gap:13}},[
       e('div',null,[e('label',{style:LS},'CATEGORY'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},CATS2.map(cc=>e('button',{key:cc.k,onClick:()=>up('cat',cc.k),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.cat===cc.k?C.lm:C.bd}`,background:f.cat===cc.k?C.lm+'20':C.cd,color:f.cat===cc.k?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13}},cc.ic),cc.l])))]),
       e('div',null,[
-        e('label',{style:LS},`PHOTOS · ${photos.length}/4`),
+        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
+          e('label',{style:{...LS,marginBottom:0}},`PHOTOS · ${photos.length}/4 ${photos.length===0?'(required)':''}`),
+          photos.length===0&&e('span',{style:{fontSize:9,color:C.mt}},'📸 Natural light, full paddle in frame'),
+        ]),
         e('input',{type:'file',accept:'image/*',multiple:true,ref:fileRef,onChange:onFile,style:{display:'none'}}),
         e('div',{style:{display:'flex',gap:7,overflowX:'auto'}},[0,1,2,3].map(i=>{
           const p=photos[i];
           if(p)return e('div',{key:i,style:{position:'relative',width:72,height:72,flexShrink:0,borderRadius:10,overflow:'hidden',border:`2px solid ${C.lm}40`}},[
             e('img',{src:p.preview,style:{width:'100%',height:'100%',objectFit:'cover'}}),
             e('button',{onClick:()=>removePhoto(i),style:{position:'absolute',top:3,right:3,width:18,height:18,borderRadius:'50%',background:'rgba(0,0,0,0.7)',border:'none',color:'#fff',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,lineHeight:1}},'×'),
-            i===0&&e('div',{style:{position:'absolute',bottom:3,left:3,fontSize:7,color:'#fff',background:'rgba(0,0,0,0.6)',borderRadius:4,padding:'1px 5px',fontWeight:700}},'MAIN'),
+            i===0&&e('div',{style:{position:'absolute',bottom:3,left:3,fontSize:9,color:'#fff',background:'rgba(0,0,0,0.6)',borderRadius:4,padding:'1px 5px',fontWeight:700}},'MAIN'),
           ]);
           return e('div',{key:i,onClick:pickPhoto,style:{width:72,height:72,flexShrink:0,background:i===photos.length?C.cd:C.sf,border:`2px dashed ${i===photos.length?C.lm+'40':C.dm}`,borderRadius:10,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',cursor:'pointer'}},[
             e('div',{style:{fontSize:18,opacity:i===photos.length?.9:.4}},i===photos.length?'📷':'+'),
-            e('div',{style:{fontSize:8,color:C.mt}},i===0?'Main':'Add'),
+            e('div',{style:{fontSize:9,color:C.mt}},i===0?'Main':'Add'),
           ]);
         })),
+        photos.length>0&&photos.length<3&&e('div',{style:{fontSize:9,color:C.mt,marginTop:5,lineHeight:1.4}},'💡 Listings with 3+ photos sell 2× faster. Show the face, edge, and any wear.'),
       ]),
       e('div',null,[e('label',{style:LS},'BRAND'),e('select',{value:f.brand,onChange:ev=>up('brand',ev.target.value),style:IS},[e('option',{value:''},'Select brand...'),...BRANDS.map(b=>e('option',{key:b,value:b},b))])]),
       e('div',null,[e('label',{style:LS},f.cat==='paddle'?'PADDLE MODEL':'MODEL / NAME'),e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:'Item name...',style:IS})]),
       pdata&&e('div',{style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5}},'✓ FOUND IN PADDLE DATABASE'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[['Core',pdata.core],['Face',pdata.face],['Shape',pdata.shape],['Thick',pdata.thk],['Weight',pdata.wt]].map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`)))]),
       e('div',null,[e('label',{style:LS},'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:f.price,onChange:ev=>up('price',ev.target.value),type:'number',placeholder:'0',style:{...IS,paddingLeft:24}})])]),
+      f.price&&e('div',{style:{display:'flex',gap:6}},[
+        e('button',{onClick:()=>up('negotiable',true),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${f.negotiable?C.lm:C.bd}`,background:f.negotiable?C.lm+'15':'transparent',color:f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'💬 Negotiable'),
+        e('button',{onClick:()=>up('negotiable',false),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${!f.negotiable?C.lm:C.bd}`,background:!f.negotiable?C.lm+'15':'transparent',color:!f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'🔒 Firm price'),
+      ]),
       pdata&&e(PriceComp,{avgS:pdata.avgS,avgL:pdata.avgL,rng:pdata.rng,userPrice:f.price}),
-      e('div',null,[e('label',{style:LS},'CONDITION'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>up('cond',cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${f.cond===cc?C.lm:C.bd}`,background:f.cond===cc?C.lm+'20':'transparent',color:f.cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc)))]),
+      e('div',null,[
+        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
+          e('label',{style:{...LS,marginBottom:0}},'CONDITION'),
+          e('button',{onClick:onOpenCondGuide,style:{background:'transparent',border:'none',color:C.lm,fontSize:10,cursor:'pointer',fontWeight:700}},'See guide ›'),
+        ]),
+        e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>up('cond',cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${f.cond===cc?C.lm:C.bd}`,background:f.cond===cc?C.lm+'20':'transparent',color:f.cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc))),
+      ]),
       e('div',null,[e('label',{style:LS},'DESCRIPTION'),e('textarea',{value:f.desc,onChange:ev=>up('desc',ev.target.value),placeholder:"Describe condition, why selling, preferred meet-up...",rows:3,style:{...IS,resize:'vertical',lineHeight:1.5}})]),
       f.cat==='paddle'&&e('div',{style:{background:C.tl+'10',borderRadius:10,padding:11,border:`1px solid ${C.tl}25`,display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',null,[e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Open to trades?'),e('div',{style:{fontSize:9,color:C.mt}},'Surfaces this in trade matches')]),e('button',{onClick:()=>up('willTrade',!f.willTrade),style:{width:42,height:22,borderRadius:11,background:f.willTrade?C.tl:C.dm,border:'none',cursor:'pointer',position:'relative'}},[e('div',{style:{width:16,height:16,borderRadius:'50%',background:'#fff',position:'absolute',top:3,left:f.willTrade?23:3,transition:'left .2s'}})])]),
     ]),
-    e('div',{key:'f',style:{padding:'11px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:async()=>{if(valid&&!busy){setBusy(true);await onPost(f,photos.map(p=>p.file));setBusy(false);}},style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy)?C.cta:C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},busy?'Posting...':valid?'🚀 Post Listing':'Fill required fields')]),
+    e('div',{key:'f',style:{padding:'11px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:handlePost,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy)?C.lm:C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},busy?'Posting...':valid?'Post Listing':photos.length===0?'Add at least 1 photo':'Fill required fields')]),
   ]);
 }
 
@@ -1071,10 +1212,14 @@ function AuthScreen({onSignedIn}){
     e('button',{onClick:()=>setMode('signin'),style:{padding:'12px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Go to Sign In'),
   ]);
   return e('div',{style:{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',padding:'0 22px',background:C.bg}},[
-    e('div',{key:'lg',style:{textAlign:'center',marginBottom:24}},[
+    e('div',{key:'lg',style:{textAlign:'center',marginBottom:20}},[
       e('div',{style:{fontSize:32,marginBottom:8}},'🏓'),
       e('div',{style:{fontSize:22,fontWeight:900,color:C.lm,letterSpacing:-.5}},'DINK EXCHANGE'),
-      e('div',{style:{fontSize:11,color:C.mt,marginTop:4}},mode==='signin'?'Welcome back':'Join your local paddle community'),
+      e('div',{style:{fontSize:11,color:C.mt,marginTop:4}},mode==='signin'?'Welcome back':'Buy, sell & trade pickleball gear locally'),
+    ]),
+    mode==='signup'&&e('div',{key:'vp',style:{background:C.lm+'08',borderRadius:12,padding:'10px 12px',marginBottom:16,border:`1px solid ${C.lm}20`}},[
+      e('div',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5,marginBottom:6}},'WHY DINK EXCHANGE'),
+      e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.5}},'🏓 Find paddles near you · 🔄 Trade with other players · 💰 Fair price intel built in'),
     ]),
     e('button',{key:'gg',onClick:googleSignIn,disabled:busy,style:{width:'100%',padding:'12px 0',borderRadius:11,background:'#fff',border:`1px solid ${C.bd}`,cursor:busy?'default':'pointer',fontSize:13,fontWeight:700,color:C.tx,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',gap:9}},[
       e('svg',{key:'gi',width:17,height:17,viewBox:'0 0 18 18'},[
@@ -1105,6 +1250,128 @@ function LoadingScreen(){
   ]);
 }
 
+function SafetyTipsModal({onClose}){
+  const tips=[
+    {ic:'📍',t:'Meet in a public place',d:'Local pickleball courts or busy parking lots are ideal'},
+    {ic:'☀️',t:'Daytime exchanges only',d:'Avoid late-night meetups, especially for first-time buyers'},
+    {ic:'👥',t:'Bring a friend',d:'For high-value transactions, never go alone'},
+    {ic:'💵',t:'Cash or in-app payment',d:'Avoid wire transfers, gift cards, or anything that can\'t be reversed'},
+    {ic:'🔍',t:'Inspect before you pay',d:'Hold the paddle, check condition, confirm specs match the listing'},
+    {ic:'🚩',t:'Trust your gut',d:'If something feels off, walk away. Report suspicious users.'},
+  ];
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:35}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:20,borderTopRightRadius:20,padding:20,maxHeight:'85%',overflowY:'auto',animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[
+        e('div',null,[e('div',{style:{fontSize:16,fontWeight:900,color:C.tx}},'🛡️ Safe Meet-up Tips'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2}},'Best practices for in-person exchanges')]),
+        e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:20,cursor:'pointer'}},'✕'),
+      ]),
+      e('div',{style:{display:'flex',flexDirection:'column',gap:10}},tips.map(t=>e('div',{key:t.t,style:{background:C.cd,borderRadius:12,padding:12,display:'flex',gap:11,border:`1px solid ${C.bd}`}},[
+        e('div',{style:{fontSize:22,flexShrink:0}},t.ic),
+        e('div',null,[e('div',{style:{fontSize:12,fontWeight:800,color:C.tx,marginBottom:2}},t.t),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},t.d)]),
+      ]))),
+    ]),
+  ]);
+}
+
+function ConditionGuideModal({onClose}){
+  const grades=[
+    {g:10,l:'Brand New',d:'Unused, original packaging, never hit a ball',col:C.ok},
+    {g:9,l:'Like New',d:'Played <5 hours, no visible wear, edge guard pristine',col:C.ok},
+    {g:7,l:'Good',d:'Light face wear, minor edge nicks, plays like new',col:C.lm},
+    {g:5,l:'Fair',d:'Visible face wear, scuffed edges, structurally sound',col:C.am},
+    {g:3,l:'Heavy Use',d:'Significant wear, may have chips or repaired damage',col:C.rd},
+  ];
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:35}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:20,borderTopRightRadius:20,padding:20,maxHeight:'80%',overflowY:'auto',animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[
+        e('div',null,[e('div',{style:{fontSize:16,fontWeight:900,color:C.tx}},'Condition Guide'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2}},'How sellers grade paddle condition')]),
+        e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:20,cursor:'pointer'}},'✕'),
+      ]),
+      e('div',{style:{display:'flex',flexDirection:'column',gap:8}},grades.map(g=>e('div',{key:g.g,style:{background:C.cd,borderRadius:12,padding:'10px 12px',display:'flex',gap:11,alignItems:'center',border:`1px solid ${g.col}30`}},[
+        e('div',{style:{width:38,height:38,borderRadius:'50%',background:g.col+'18',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:900,color:g.col,flexShrink:0}},g.g),
+        e('div',null,[e('div',{style:{fontSize:12,fontWeight:800,color:C.tx}},g.l),e('div',{style:{fontSize:10,color:C.mt,lineHeight:1.5}},g.d)]),
+      ]))),
+    ]),
+  ]);
+}
+
+function BuyNowConfirm({L,onCancel,onConfirm}){
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:35,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:16,padding:20,maxWidth:320,width:'100%',animation:'slideUp .2s'}},[
+      e('div',{style:{textAlign:'center',marginBottom:14}},[
+        e('div',{style:{fontSize:32,marginBottom:6}},'🛒'),
+        e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Confirm Purchase'),
+        e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},'You\'re committing to buy this item at the asking price. The seller will be notified.'),
+      ]),
+      e('div',{style:{background:C.cd,borderRadius:12,padding:11,marginBottom:14,display:'flex',gap:10,alignItems:'center',border:`1px solid ${C.bd}`}},[
+        e(PSv,{col:C.lm+'55',sz:30}),
+        e('div',{style:{flex:1}},[
+          e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},L.brand),
+          e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},L.model),
+        ]),
+        e('div',{style:{fontSize:18,fontWeight:900,color:C.lm}},`$${L.price}`),
+      ]),
+      e('div',{style:{display:'flex',gap:8}},[
+        e('button',{onClick:onCancel,style:{flex:1,padding:'12px 0',borderRadius:12,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:13,fontWeight:700,color:C.mt}},'Cancel'),
+        e('button',{onClick:onConfirm,style:{flex:2,padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`Confirm · $${L.price}`),
+      ]),
+    ]),
+  ]);
+}
+
+function ReviewModal({L,seller,onClose,onSubmit}){
+  const [rating,setRating]=useState(5);
+  const [review,setReview]=useState('');
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:35}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:20,borderTopRightRadius:20,padding:20,animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},[
+        e('div',{style:{fontSize:16,fontWeight:900,color:C.tx}},'Leave a Review'),
+        e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:20,cursor:'pointer'}},'✕'),
+      ]),
+      e('div',{style:{fontSize:11,color:C.mt,marginBottom:14}},`How was your transaction with ${seller?.name||'this seller'}?`),
+      e('div',{style:{display:'flex',gap:6,justifyContent:'center',marginBottom:16}},[1,2,3,4,5].map(n=>e('button',{key:n,onClick:()=>setRating(n),style:{background:'transparent',border:'none',cursor:'pointer',fontSize:32,color:n<=rating?C.am:C.bd,padding:0,lineHeight:1}},'★'))),
+      e('textarea',{value:review,onChange:ev=>setReview(ev.target.value),placeholder:'Optional — share details about the exchange...',rows:3,style:{width:'100%',padding:10,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:12,fontSize:12,color:C.tx,outline:'none',resize:'none',marginBottom:14,lineHeight:1.5}}),
+      e('button',{onClick:()=>onSubmit(rating,review),style:{width:'100%',padding:'13px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Submit Review'),
+    ]),
+  ]);
+}
+
+function OnboardingBanner({step,onComplete,onSkip,onOpenSettings,onOpenGear}){
+  const steps=[
+    {ic:'📍',t:'Set your location',d:'Helps us show listings near you',cta:'Set Location',action:onOpenSettings},
+    {ic:'🏓',t:'Add your skill level',d:'Find players at your level',cta:'Set Skill',action:onOpenSettings},
+    {ic:'🎒',t:'Add a paddle to your gear',d:'Unlock trade matches',cta:'Add Gear',action:onOpenGear},
+  ];
+  const s=steps[step]||steps[0];
+  return e('div',{style:{margin:'10px 14px 0',background:`linear-gradient(135deg,${C.lm}15,${C.tl}10)`,borderRadius:13,padding:'12px 13px',border:`1px solid ${C.lm}30`,display:'flex',alignItems:'center',gap:11}},[
+    e('div',{style:{fontSize:24,flexShrink:0}},s.ic),
+    e('div',{style:{flex:1,minWidth:0}},[
+      e('div',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.4,marginBottom:1}},`STEP ${step+1} OF 3`),
+      e('div',{style:{fontSize:12,fontWeight:800,color:C.tx,marginBottom:1}},s.t),
+      e('div',{style:{fontSize:10,color:C.mt,lineHeight:1.4}},s.d),
+    ]),
+    e('div',{style:{display:'flex',flexDirection:'column',gap:5,flexShrink:0}},[
+      e('button',{onClick:s.action,style:{padding:'6px 11px',borderRadius:8,background:C.lm,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff'}},s.cta),
+      e('button',{onClick:onSkip,style:{padding:0,background:'transparent',border:'none',cursor:'pointer',fontSize:9,color:C.mt}},'Dismiss'),
+    ]),
+  ]);
+}
+
+function Toast({msg,onDismiss}){
+  useEffect(()=>{const t=setTimeout(onDismiss,2800);return()=>clearTimeout(t);},[onDismiss]);
+  return e('div',{style:{position:'absolute',bottom:80,left:14,right:14,zIndex:40,display:'flex',justifyContent:'center',pointerEvents:'none'}},[
+    e('div',{style:{background:C.tx,color:'#fff',borderRadius:12,padding:'10px 16px',fontSize:12,fontWeight:600,boxShadow:'0 8px 24px rgba(0,0,0,0.18)',animation:'slideUp .25s',maxWidth:300,textAlign:'center'}},msg),
+  ]);
+}
+
+function ErrorBanner({msg,onDismiss}){
+  return e('div',{style:{position:'absolute',top:46,left:14,right:14,zIndex:35,background:C.rd,color:'#fff',borderRadius:12,padding:'9px 12px',fontSize:11,fontWeight:600,boxShadow:'0 4px 16px rgba(239,68,68,0.3)',animation:'slideUp .2s',display:'flex',alignItems:'center',gap:8}},[
+    e('span',{key:'i'},'⚠️'),
+    e('span',{key:'m',style:{flex:1}},msg),
+    e('button',{key:'x',onClick:onDismiss,style:{background:'transparent',border:'none',color:'#fff',fontSize:14,cursor:'pointer',padding:0,opacity:.8}},'✕'),
+  ]);
+}
+
 function App(){
   const [authState,setAuthState]=useState('loading');
   const [me,setMe]=useState(null);
@@ -1128,6 +1395,17 @@ function App(){
   const [following,setFollowing]=useState([1,4,6]); // user ids I follow (demo seed)
   const [followers,setFollowers]=useState(demoUserList([...(FOLLOW_GRAPH[0]||[])])); // who follows me
   const [followingUsers,setFollowingUsers]=useState(demoUserList([1,4,6])); // profiles I follow
+  // Global UI feedback
+  const [toast,setToast]=useState(null);
+  const [errorMsg,setErrorMsg]=useState(null);
+  const [buyConfirm,setBuyConfirm]=useState(null);
+  const [reviewFor,setReviewFor]=useState(null);
+  const [safetyOpen,setSafetyOpen]=useState(false);
+  const [condGuideOpen,setCondGuideOpen]=useState(false);
+  const [onboardStep,setOnboardStep]=useState(0);
+  const [onboardDismissed,setOnboardDismissed]=useState(false);
+  const showToast=useCallback((msg)=>setToast(msg),[]);
+  const showError=useCallback((msg)=>setErrorMsg(msg),[]);
 
   // Keep module-level follow state in sync for LCard / helpers
   useEffect(()=>{FOLLOWING=new Set(following);},[following]);
@@ -1136,49 +1414,45 @@ function App(){
 
   // --- AUTH + PROFILE LOAD ---
   const loadProfile=useCallback(async(userId)=>{
-    try{
-      const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
-      const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
-      if(prof){
-        const meObj={
-          id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
-          vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
-          since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
-          resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
-          ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
-          cashapp:prof.cashapp||'',venmo:prof.venmo||'',
-          rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
-          lat:prof.lat,lng:prof.lng,
-        };
-        setMe(meObj);
-        if(us){
-          setSettings({
-            name:meObj.name,location:meObj.loc,skill:meObj.skill,
-            cashapp:meObj.cashapp,venmo:meObj.venmo,
-            notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
-            notifTrades:us.notif_trades,notifMessages:us.notif_messages,
-            preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
-          });
-        }
+    const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
+    const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
+    if(prof){
+      const meObj={
+        id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
+        vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
+        since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
+        resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
+        ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
+        cashapp:prof.cashapp||'',venmo:prof.venmo||'',
+        rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
+        lat:prof.lat,lng:prof.lng,
+      };
+      setMe(meObj);
+      if(us){
+        setSettings({
+          name:meObj.name,location:meObj.loc,skill:meObj.skill,
+          cashapp:meObj.cashapp,venmo:meObj.venmo,
+          notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
+          notifTrades:us.notif_trades,notifMessages:us.notif_messages,
+          preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+        });
       }
-    }catch(err){console.error('loadProfile error',err);}
+    }
   },[]);
 
   useEffect(()=>{
     let mounted=true;
-    // Safety net: if auth check takes >6s, fall back to sign-in screen
-    const timeout=setTimeout(()=>{if(mounted)setAuthState(s=>s==='loading'?'out':s);},6000);
     sb.auth.getSession().then(async({data:{session}})=>{
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else setAuthState('out');
-    }).catch(()=>{if(mounted)setAuthState('out');});
+    });
     const {data:{subscription}}=sb.auth.onAuthStateChange(async(_evt,session)=>{
       if(!mounted)return;
       if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
       else{setMe(null);setAuthState('out');}
     });
-    return()=>{mounted=false;clearTimeout(timeout);subscription.unsubscribe();};
+    return()=>{mounted=false;subscription.unsubscribe();};
   },[loadProfile]);
 
   const signOut=async()=>{await sb.auth.signOut();};
@@ -1302,6 +1576,10 @@ function App(){
     const isF=following.includes(userId);
     // Optimistic update
     setFollowing(f=>isF?f.filter(x=>x!==userId):[...f,userId]);
+    // Toast feedback
+    const target=US.find(u=>u.id===userId)||followingUsers.find(u=>u.id===userId);
+    const name=target?.name?.split(' ')[0]||'user';
+    showToast(isF?`Unfollowed ${name}`:`Following ${name} — you'll see their new listings first`);
     // Keep the Following list in sync for demo (integer) users
     if(typeof userId==='number'){
       if(isF)setFollowingUsers(us=>us.filter(u=>u.id!==userId));
@@ -1537,35 +1815,41 @@ function App(){
   return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
     e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`0 20px 60px rgba(31,41,51,0.12), 0 0 0 1px ${C.bd}`,position:'relative'}},[
       e('div',{key:'sb',style:{height:42,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 18px',borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
-        e('div',{style:{display:'flex',alignItems:'center',gap:6}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm,letterSpacing:-.5}},'🏓 DINK'),e('span',{style:{fontSize:7,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
-        e('div',{style:{display:'flex',alignItems:'center',gap:10}},[
-          e('span',{style:{fontSize:10,color:C.mt}},`📍 ${locMode==='local'?'Maryville':'Anywhere'}`),
-          e('button',{onClick:()=>setSavedOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,fontSize:14,color:saved.length>0?C.lm:C.mt,lineHeight:1}},['♥',saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:8,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
-          e('button',{onClick:()=>setNotifOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,fontSize:14,color:C.lm}},['🔔',notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:8,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:6}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm,letterSpacing:-.5}},'🏓 DINK'),e('span',{style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:14}},[
+          e('button',{onClick:()=>setSavedOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,fontSize:14,color:saved.length>0?C.lm:C.mt,lineHeight:1}},['♥',saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
+          e('button',{onClick:()=>setNotifOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,fontSize:14,color:C.lm}},['🔔',notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
         ]),
       ]),
       e('div',{key:'mn',style:{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}},[
-        crt&&e(CrtOverlay,{onClose:()=>setCrt(false),onPost:handlePost}),
+        errorMsg&&e(ErrorBanner,{key:'err',msg:errorMsg,onDismiss:()=>setErrorMsg(null)}),
+        toast&&e(Toast,{key:'toast',msg:toast,onDismiss:()=>setToast(null)}),
+        safetyOpen&&e(SafetyTipsModal,{key:'safety',onClose:()=>setSafetyOpen(false)}),
+        condGuideOpen&&e(ConditionGuideModal,{key:'cguide',onClose:()=>setCondGuideOpen(false)}),
+        buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
+        reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{setReviewFor(null);showToast('Thanks for your review!');}}),
+        crt&&e(CrtOverlay,{onClose:()=>setCrt(false),onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true)}),
         matchOpen&&e(MatchOverlay,{onClose:()=>setMatchOpen(false),onChat:()=>setTab('messages')}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:setView,onMsgs:()=>setTab('messages'),onTrade:()=>setMatchOpen(true),notifs,onMarkRead:markNotifRead}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);setView(l);},savedMeta}),
-        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me}),
-        offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>initOffer(offerOpen,amt,note)}),
+        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true)}),
+        offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'🎉 Listing posted!')]),
+        !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>initBuyNow(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:setView,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:setView,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true)}),
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:setView,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:setView,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters}),
-          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:setView,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow}),
+          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,onOpenReview:(L,seller)=>setReviewFor({L,seller})}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:setView,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true)}),
         ],
       ]),
       !overlayOpen&&!view&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
-        t.center?e('div',{style:{width:46,height:46,borderRadius:'50%',background:C.cta,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,fontWeight:900,color:'#fff',marginTop:-14,boxShadow:`0 4px 16px ${C.cta}66`,border:`3px solid ${C.bg}`}},t.ic):[
+        t.center?e('div',{style:{width:46,height:46,borderRadius:'50%',background:C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,fontWeight:900,color:'#fff',marginTop:-14,boxShadow:`0 4px 16px ${C.lm}66`,border:`3px solid ${C.bg}`}},t.ic):[
           e('span',{style:{fontSize:17,opacity:tab===t.id?1:.6}},t.ic),
-          e('span',{style:{fontSize:8,color:tab===t.id?C.lm:C.mt,fontWeight:tab===t.id?700:400}},t.l),
+          e('span',{style:{fontSize:10,color:tab===t.id?C.lm:C.mt,fontWeight:tab===t.id?700:500}},t.l),
           tab===t.id&&e('div',{style:{position:'absolute',bottom:5,width:4,height:4,borderRadius:'50%',background:C.lm}}),
-          t.id==='messages'&&tot>0&&e('div',{style:{position:'absolute',top:5,right:'22%',width:14,height:14,borderRadius:'50%',background:C.rd,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,fontWeight:900,color:'#fff'}},tot),
+          t.id==='messages'&&tot>0&&e('div',{style:{position:'absolute',top:5,right:'22%',width:14,height:14,borderRadius:'50%',background:C.rd,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900,color:'#fff'}},tot),
         ],
       ]))),
     ]),
