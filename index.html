@@ -1245,8 +1245,14 @@ function AuthScreen({onSignedIn}){
 }
 
 function LoadingScreen(){
+  const [slow,setSlow]=useState(false);
+  useEffect(()=>{const t=setTimeout(()=>setSlow(true),4000);return()=>clearTimeout(t);},[]);
   return e('div',{style:{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg}},[
-    e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:32,marginBottom:8}},'🏓'),e('div',{style:{fontSize:11,color:C.mt}},'Loading...')]),
+    e('div',{style:{textAlign:'center',padding:'0 24px'}},[
+      e('div',{style:{fontSize:32,marginBottom:8}},'🏓'),
+      e('div',{style:{fontSize:11,color:C.mt,marginBottom:slow?12:0}},'Loading...'),
+      slow&&e('div',{style:{fontSize:10,color:C.mt,lineHeight:1.6,maxWidth:240,margin:'0 auto'}},'Taking longer than usual. Check your connection, then try a hard refresh (Cmd+Shift+R / Ctrl+Shift+R).'),
+    ]),
   ]);
 }
 
@@ -1414,45 +1420,78 @@ function App(){
 
   // --- AUTH + PROFILE LOAD ---
   const loadProfile=useCallback(async(userId)=>{
-    const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
-    const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
-    if(prof){
-      const meObj={
-        id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
-        vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
-        since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
-        resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
-        ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
-        cashapp:prof.cashapp||'',venmo:prof.venmo||'',
-        rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
-        lat:prof.lat,lng:prof.lng,
-      };
-      setMe(meObj);
-      if(us){
-        setSettings({
-          name:meObj.name,location:meObj.loc,skill:meObj.skill,
-          cashapp:meObj.cashapp,venmo:meObj.venmo,
-          notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
-          notifTrades:us.notif_trades,notifMessages:us.notif_messages,
-          preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+    try{
+      const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
+      const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
+      if(prof){
+        const meObj={
+          id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
+          vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
+          since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
+          resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
+          ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
+          cashapp:prof.cashapp||'',venmo:prof.venmo||'',
+          rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
+          lat:prof.lat,lng:prof.lng,
+        };
+        setMe(meObj);
+        if(us){
+          setSettings({
+            name:meObj.name,location:meObj.loc,skill:meObj.skill,
+            cashapp:meObj.cashapp,venmo:meObj.venmo,
+            notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
+            notifTrades:us.notif_trades,notifMessages:us.notif_messages,
+            preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+          });
+        }
+      } else {
+        // Auth session exists but no profile row yet — use a safe default so the app doesn't hang
+        setMe({
+          id:userId,name:'New Player',ini:'NP',vfd:false,
+          loc:'Set your location',skill:'—',since:new Date().getFullYear().toString(),
+          resp:'—',sales:0,bio:'',ac:'#4DA8FF',bdg:[],
+          cashapp:'',venmo:'',rating:0,rev:0,trust:50,lat:null,lng:null,
         });
       }
+    }catch(err){
+      console.error('loadProfile error:',err);
+      // Still unblock the UI — don't leave user on loading screen
+      setMe({
+        id:userId,name:'Player',ini:'P',vfd:false,
+        loc:'—',skill:'—',since:'—',
+        resp:'—',sales:0,bio:'',ac:'#4DA8FF',bdg:[],
+        cashapp:'',venmo:'',rating:0,rev:0,trust:50,lat:null,lng:null,
+      });
     }
   },[]);
 
   useEffect(()=>{
     let mounted=true;
+    // Safety timeout — if auth check takes >8s, bail to login screen
+    const failsafe=setTimeout(()=>{
+      if(mounted)setAuthState(s=>s==='loading'?'out':s);
+    },8000);
     sb.auth.getSession().then(async({data:{session}})=>{
       if(!mounted)return;
-      if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
-      else setAuthState('out');
-    });
+      try{
+        if(session?.user){await loadProfile(session.user.id);if(mounted)setAuthState('in');}
+        else if(mounted)setAuthState('out');
+      }catch(e){
+        console.error('Auth init error:',e);
+        if(mounted)setAuthState('out');
+      }
+    }).catch(()=>{ if(mounted)setAuthState('out'); });
     const {data:{subscription}}=sb.auth.onAuthStateChange(async(_evt,session)=>{
       if(!mounted)return;
-      if(session?.user){await loadProfile(session.user.id);setAuthState('in');}
-      else{setMe(null);setAuthState('out');}
+      try{
+        if(session?.user){await loadProfile(session.user.id);if(mounted)setAuthState('in');}
+        else{if(mounted){setMe(null);setAuthState('out');}}
+      }catch(e){
+        console.error('Auth state change error:',e);
+        if(mounted)setAuthState('out');
+      }
     });
-    return()=>{mounted=false;subscription.unsubscribe();};
+    return()=>{mounted=false;clearTimeout(failsafe);subscription.unsubscribe();};
   },[loadProfile]);
 
   const signOut=async()=>{await sb.auth.signOut();};
