@@ -22,16 +22,51 @@ const {useState,useRef,useEffect,useCallback}=React;
 const C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#4DA8FF',ok:'#6FCF97'};
 const e=React.createElement;
 
-const ME={id:0,name:'Alex Rivera',ini:'AR',vfd:true,loc:'Maryville, TN',skill:'3.5',since:'2023',resp:'< 2 hrs',sales:8,bio:'Local pickleball enthusiast, always looking to upgrade my paddle game. Verified seller — fast meet-ups around Maryville. Hit me up if you have any Selkirk or JOOLA carbon paddles!',ac:'#4DA8FF',bdg:['Community Member'],cashapp:'$alexrivera',venmo:'@alex-rivera-tn'};
+// --- SECURITY HELPERS ---
+// Allowlist of trusted hosts for any user-supplied photo URL.
+// Supabase Storage object URLs live under <project>.supabase.co/storage/v1/object/...
+const ALLOWED_PHOTO_HOSTS=new Set([
+  'ajueomyglbchchusrxhr.supabase.co',
+  'images.unsplash.com',
+]);
+function safePhotoURL(u){
+  if(typeof u!=='string'||u.length>2048)return null;
+  try{
+    const url=new URL(u);
+    if(url.protocol!=='https:')return null;
+    if(!ALLOWED_PHOTO_HOSTS.has(url.host))return null;
+    return url.toString();
+  }catch{return null;}
+}
+// Strip control chars (incl. U+202E RTL override), cap length, collapse whitespace.
+function sanitizeText(s,maxLen=2000){
+  if(typeof s!=='string')return '';
+  let out=s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u202E]/g,'');
+  out=out.replace(/[ \t]+/g,' ').trim();
+  return out.slice(0,maxLen);
+}
+// Money validator — finite, non-negative, ≤ $100k, max 2 decimals.
+function safeMoney(n){
+  const v=Number(n);
+  if(!Number.isFinite(v)||v<0||v>100000)return null;
+  return Math.round(v*100)/100;
+}
+// Cash App / Venmo handle validators — prevent URL injection in deep-links.
+function safeCashapp(s){const t=sanitizeText(s,30);return /^\$?[A-Za-z0-9_]{1,20}$/.test(t)?t:'';}
+function safeVenmo(s){const t=sanitizeText(s,40);return /^@?[A-Za-z0-9_-]{1,30}$/.test(t)?t:'';}
+
+const ME={id:0,name:'Alex Rivera',ini:'AR',vfd:true,loc:'Maryville, TN',skill:'3.5',since:'2023',resp:'< 2 hrs',sales:8,bio:'Local pickleball enthusiast, always looking to upgrade my paddle game. Verified seller — fast meet-ups around Maryville. Hit me up if you have any Selkirk or JOOLA carbon paddles!',ac:'#4DA8FF',bdg:['Community Member']};
+// Payment handles intentionally omitted from demo seed data — they are fetched
+// only inside an accepted-deal conversation (see PayoutSheet logic).
 let US=[
-{id:1,name:'Marcus Webb',ini:'MW',rating:4.9,rev:47,trust:98,vfd:true,loc:'Maryville',dist:1.2,bdg:['Top Seller'],since:'2022',resp:'< 1 hr',sales:34,ac:'#14B8A6',skill:'4.0',lastActive:'5m ago',cashapp:'$marcuswebb',venmo:'@marcus-webb'},
-{id:2,name:'Sarah Chen',ini:'SC',rating:4.8,rev:32,trust:95,vfd:true,loc:'Knoxville',dist:3.4,bdg:['Community Pillar'],since:'2021',resp:'< 2 hrs',sales:21,ac:'#EC4899',skill:'4.5',lastActive:'1h ago',cashapp:'$sarahchen',venmo:'@sarah-chen'},
-{id:3,name:'Travis Hill',ini:'TH',rating:4.7,rev:18,trust:88,vfd:false,loc:'Alcoa',dist:2.1,bdg:[],since:'2023',resp:'< 4 hrs',sales:12,ac:'#F59E0B',skill:'3.0',lastActive:'4h ago',cashapp:'$travish',venmo:'@travis-h'},
-{id:4,name:'Diana Park',ini:'DP',rating:5.0,rev:89,trust:99,vfd:true,loc:'Maryville',dist:0.8,bdg:['Top Seller','Pro'],since:'2020',resp:'< 30 min',sales:67,ac:'#8B5CF6',skill:'5.0',lastActive:'Now',cashapp:'$dianap',venmo:'@diana-park'},
-{id:5,name:'Jake Monroe',ini:'JM',rating:4.5,rev:11,trust:82,vfd:false,loc:'Louisville',dist:5.8,bdg:[],since:'2023',resp:'< 1 day',sales:7,ac:'#6FCF97',skill:'2.5',lastActive:'2d ago',cashapp:'$jakem',venmo:'@jake-m'},
-{id:6,name:'Priya Nair',ini:'PN',rating:4.9,rev:56,trust:97,vfd:true,loc:'Maryville',dist:1.5,bdg:['Top Seller'],since:'2021',resp:'< 1 hr',sales:41,ac:'#EC4899',skill:'3.5',lastActive:'12m ago',cashapp:'$priyan',venmo:'@priya-n'},
-{id:7,name:'Carlos Ruiz',ini:'CR',rating:4.8,rev:29,trust:93,vfd:true,loc:'Sevierville',dist:18.4,bdg:['Top Seller'],since:'2022',resp:'< 2 hrs',sales:24,ac:'#10B981',skill:'4.0',lastActive:'30m ago',cashapp:'$carlosr',venmo:'@carlos-r'},
-{id:8,name:'Emma Lee',ini:'EL',rating:4.6,rev:15,trust:86,vfd:false,loc:'Nashville',dist:165.2,bdg:[],since:'2023',resp:'< 6 hrs',sales:9,ac:'#F43F5E',skill:'3.5',lastActive:'3h ago',cashapp:'$emmalee',venmo:'@emma-l'},
+{id:1,name:'Marcus Webb',ini:'MW',rating:4.9,rev:47,trust:98,vfd:true,loc:'Maryville',dist:1.2,bdg:['Top Seller'],since:'2022',resp:'< 1 hr',sales:34,ac:'#14B8A6',skill:'4.0',lastActive:'5m ago'},
+{id:2,name:'Sarah Chen',ini:'SC',rating:4.8,rev:32,trust:95,vfd:true,loc:'Knoxville',dist:3.4,bdg:['Community Pillar'],since:'2021',resp:'< 2 hrs',sales:21,ac:'#EC4899',skill:'4.5',lastActive:'1h ago'},
+{id:3,name:'Travis Hill',ini:'TH',rating:4.7,rev:18,trust:88,vfd:false,loc:'Alcoa',dist:2.1,bdg:[],since:'2023',resp:'< 4 hrs',sales:12,ac:'#F59E0B',skill:'3.0',lastActive:'4h ago'},
+{id:4,name:'Diana Park',ini:'DP',rating:5.0,rev:89,trust:99,vfd:true,loc:'Maryville',dist:0.8,bdg:['Top Seller','Pro'],since:'2020',resp:'< 30 min',sales:67,ac:'#8B5CF6',skill:'5.0',lastActive:'Now'},
+{id:5,name:'Jake Monroe',ini:'JM',rating:4.5,rev:11,trust:82,vfd:false,loc:'Louisville',dist:5.8,bdg:[],since:'2023',resp:'< 1 day',sales:7,ac:'#6FCF97',skill:'2.5',lastActive:'2d ago'},
+{id:6,name:'Priya Nair',ini:'PN',rating:4.9,rev:56,trust:97,vfd:true,loc:'Maryville',dist:1.5,bdg:['Top Seller'],since:'2021',resp:'< 1 hr',sales:41,ac:'#EC4899',skill:'3.5',lastActive:'12m ago'},
+{id:7,name:'Carlos Ruiz',ini:'CR',rating:4.8,rev:29,trust:93,vfd:true,loc:'Sevierville',dist:18.4,bdg:['Top Seller'],since:'2022',resp:'< 2 hrs',sales:24,ac:'#10B981',skill:'4.0',lastActive:'30m ago'},
+{id:8,name:'Emma Lee',ini:'EL',rating:4.6,rev:15,trust:86,vfd:false,loc:'Nashville',dist:165.2,bdg:[],since:'2023',resp:'< 6 hrs',sales:9,ac:'#F43F5E',skill:'3.5',lastActive:'3h ago'},
 ];
 
 // --- FOLLOW GRAPH ---
@@ -164,7 +199,9 @@ function profileToUser(p){
     resp:p.response_time||'—',sales:p.sales_count||0,
     ac:p.avatar_color||'#4DA8FF',skill:p.skill||'—',
     lastActive:p.last_active?timeAgo(p.last_active)+' ago':'—',
-    cashapp:p.cashapp||'',venmo:p.venmo||'',
+    // cashapp/venmo intentionally NOT included — payment handles must only be
+    // fetched on demand via a separate query that's gated by an accepted-deal
+    // RLS policy on the server (see security_fixes.md, Fix 9).
     lat:p.lat==null?null:Number(p.lat),lng:p.lng==null?null:Number(p.lng),
   };
 }
@@ -197,7 +234,10 @@ function mapListingRow(row,meLatLng){
     L.rng=[spec.price_min,spec.price_max];
   }
   if(row.photos&&row.photos.length>0){
-    L.photos=[...row.photos].sort((a,b)=>(a.position||0)-(b.position||0)).map(p=>p.url);
+    L.photos=[...row.photos]
+      .sort((a,b)=>(a.position||0)-(b.position||0))
+      .map(p=>safePhotoURL(p.url))
+      .filter(Boolean);
   }
   return L;
 }
@@ -311,7 +351,12 @@ function OfferOverlay({L,onClose,onSubmit}){
   const [note,setNote]=useState('');
   const diff=L.price-amount;
   const pct=Math.round((diff/L.price)*100);
-  const valid=amount>0&&amount<=L.price*1.5;
+  const safeAmt=safeMoney(amount);
+  const valid=safeAmt!=null&&safeAmt>0&&L.price!=null&&safeAmt<=Number(L.price)*1.5;
+  const submit=()=>{
+    if(!valid)return;
+    onSubmit(safeAmt,sanitizeText(note,500));
+  };
   return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:30}},[
     e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:24,borderTopRightRadius:24,padding:20,animation:'slideUp .25s ease-out'}},[
       e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[e('div',{style:{fontSize:16,fontWeight:900,color:C.tx}},'Make an Offer'),e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕')]),
@@ -323,7 +368,7 @@ function OfferOverlay({L,onClose,onSubmit}){
       ]),
       e('div',{key:'qb',style:{display:'flex',gap:6,marginBottom:14}},[0.7,0.8,0.9,0.95].map(p=>{const v=Math.round(L.price*p);return e('button',{key:p,onClick:()=>setAmount(v),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${amount===v?C.lm:C.bd}`,background:amount===v?C.lm+'20':C.cd,color:amount===v?C.lm:C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},`$${v}`);})),
       e('div',{key:'nt',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,letterSpacing:.5,display:'block',marginBottom:5}},'NOTE (OPTIONAL)'),e('textarea',{value:note,onChange:ev=>setNote(ev.target.value),placeholder:"Add context...",rows:2,style:{width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none',resize:'none'}})]),
-      e('button',{onClick:()=>{if(valid)onSubmit(amount,note);},style:{width:'100%',padding:'14px 0',borderRadius:12,background:valid?C.cta:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},`Send Offer · $${amount}`),
+      e('button',{onClick:submit,style:{width:'100%',padding:'14px 0',borderRadius:12,background:valid?C.cta:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},`Send Offer · $${amount}`),
     ]),
   ]);
 }
@@ -332,9 +377,10 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
   const [s,setS]=useState({...settings});
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
   const save=async()=>{
-    setSettings(s);
+    const cleaned={...s,cashapp:safeCashapp(s.cashapp),venmo:safeVenmo(s.venmo)};
+    setSettings(cleaned);
     if(me?.id){
-      await sb.from('profiles').update({cashapp:s.cashapp,venmo:s.venmo}).eq('id',me.id);
+      await sb.from('profiles').update({cashapp:cleaned.cashapp,venmo:cleaned.venmo}).eq('id',me.id);
       await sb.from('user_settings').update({
         notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
         notif_trades:s.notifTrades,notif_messages:s.notifMessages,
@@ -720,7 +766,8 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
   if(activeIdx!==null){
     const th=msgs[activeIdx];
     const send=async(m)=>{
-      const txt=m||reply;if(!txt.trim())return;
+      const txt=sanitizeText(m||reply,2000);
+      if(!txt)return;
       setReply('');
       // Optimistic update
       setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:txt,time:'Now',unread:0,cv:[...t.cv,{f:'m',kind:'text',msg:txt,t:'Now'}]}));
@@ -1700,23 +1747,32 @@ function App(){
   const togLoc=()=>setLocMode(m=>m==='local'?'anywhere':'local');
   const handlePost=async(formData,photoFiles)=>{
     if(!me?.id)return;
+    // --- SECURITY: sanitize every user-typed field before it touches the DB ---
+    const safeBrand=sanitizeText(formData.brand,40);
+    const safeModel=sanitizeText(formData.model,80);
+    const safeDesc=sanitizeText(formData.desc,2000);
+    const safePrice=safeMoney(formData.price);
+    if(!safeBrand||!safeModel||safePrice==null){
+      console.warn('handlePost: invalid required fields');
+      return;
+    }
     const condMap={'Brand New':10,'Like New':9,'Good':7,'Fair':5,'Heavy Use':3};
     // Look up paddle_spec id if paddle
     let specId=null;
     if(formData.cat==='paddle'){
-      const {data:spec}=await sb.from('paddle_specs').select('id').eq('brand',formData.brand).eq('model',formData.model).maybeSingle();
+      const {data:spec}=await sb.from('paddle_specs').select('id').eq('brand',safeBrand).eq('model',safeModel).maybeSingle();
       if(spec)specId=spec.id;
     }
     const row={
       seller_id:me.id,
       category:formData.cat,
-      brand:formData.brand,
-      model:formData.model,
-      price:Number(formData.price)||0,
+      brand:safeBrand,
+      model:safeModel,
+      price:safePrice,
       condition:condMap[formData.cond]||7,
       type:formData.willTrade?'both':'sale',
-      description:formData.desc,
-      location:me.loc||'',
+      description:safeDesc,
+      location:sanitizeText(me.loc||'',80),
       lat:me.lat,lng:me.lng,
       paddle_spec_id:specId,
       tag:'NEW',
@@ -1733,7 +1789,9 @@ function App(){
         const {error:upErr}=await sb.storage.from('listing-photos').upload(path,file,{cacheControl:'3600',upsert:true,contentType:file.type});
         if(upErr){console.error('photo upload',upErr);continue;}
         const {data:pub}=sb.storage.from('listing-photos').getPublicUrl(path);
-        photoRows.push({listing_id:listing.id,url:pub.publicUrl,position:i});
+        // Defense-in-depth: only persist URLs that pass the same allowlist as ingest
+        const cleanUrl=safePhotoURL(pub.publicUrl);
+        if(cleanUrl)photoRows.push({listing_id:listing.id,url:cleanUrl,position:i});
       }
       if(photoRows.length>0){
         const {error:photoErr}=await sb.from('listing_photos').insert(photoRows);
@@ -1747,7 +1805,7 @@ function App(){
         const notifRows=myFollowers.map(f=>({
           user_id:f.follower_id,type:'newlisting',
           title:`${me.name} listed a new item`,
-          message:`${formData.brand} ${formData.model} — $${formData.price}`,
+          message:`${safeBrand} ${safeModel} — $${safePrice}`,
           listing_id:listing.id,payload:{detail:'Tap to view the listing'},
         }));
         await sb.from('notifications').insert(notifRows);
@@ -1764,15 +1822,17 @@ function App(){
   const isUuid=(v)=>typeof v==='string'&&v.length>=32;
   const initBuyNow=async(L)=>{
     const sellerId=L.sid;
+    const buyPrice=safeMoney(L.price);
+    if(buyPrice==null){console.warn('initBuyNow: invalid price');return;}
     if(!isUuid(sellerId)||!me?.id||!isUuid(L.id)){
       // Demo fallback
       const existing=msgs.findIndex(m=>m.wu.id===sellerId);
-      const buyCard={f:'m',kind:'buynow',amount:L.price,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending',t:'Now'};
+      const buyCard={f:'m',kind:'buynow',amount:buyPrice,listingRef:{b:L.brand,m:L.model,p:buyPrice},status:'pending',t:'Now'};
       if(existing>=0){
-        setMsgs(ms=>ms.map((t,i)=>i!==existing?t:{...t,cv:[...t.cv,buyCard],last:`Buy Now request: $${L.price}`,time:'Now',unread:0}));
+        setMsgs(ms=>ms.map((t,i)=>i!==existing?t:{...t,cv:[...t.cv,buyCard],last:`Buy Now request: $${buyPrice}`,time:'Now',unread:0}));
         setActiveMsgIdx(existing);
       }else{
-        const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:L.brand,m:L.model,p:L.price,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Buy Now request: $${L.price}`,cv:[buyCard]};
+        const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:L.brand,m:L.model,p:buyPrice,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Buy Now request: $${buyPrice}`,cv:[buyCard]};
         setMsgs([newThread,...msgs]);setActiveMsgIdx(0);
       }
       setTab('messages');setView(null);return;
@@ -1780,10 +1840,10 @@ function App(){
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
     if(cErr){console.error('conv create',cErr);return;}
-    const payload={amount:L.price,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending'};
+    const payload={amount:buyPrice,listingRef:{b:L.brand,m:L.model,p:buyPrice},status:'pending'};
     const {data:msgRow,error:mErr}=await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'buynow',payload}).select().single();
     if(mErr){console.error('buynow msg',mErr);return;}
-    await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:L.price,kind:'buynow'});
+    await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:buyPrice,kind:'buynow'});
     await fetchConversations();
     setTab('messages');setView(null);
     // Activate this conversation
@@ -1792,17 +1852,22 @@ function App(){
 
   const initOffer=async(L,amount,note)=>{
     const sellerId=L.sid;
+    const safeAmt=safeMoney(amount);
+    const safeNote=sanitizeText(note||'',500);
+    if(safeAmt==null||safeAmt<=0||L.price==null||safeAmt>Number(L.price)*1.5){
+      console.warn('initOffer: amount out of bounds');return;
+    }
     if(!isUuid(sellerId)||!me?.id||!isUuid(L.id)){
       // Demo fallback
       const existing=msgs.findIndex(m=>m.wu.id===sellerId);
-      const offerCard={f:'m',kind:'offer',amount,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending',t:'Now'};
-      const noteCard=note?{f:'m',kind:'text',msg:note,t:'Now'}:null;
+      const offerCard={f:'m',kind:'offer',amount:safeAmt,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending',t:'Now'};
+      const noteCard=safeNote?{f:'m',kind:'text',msg:safeNote,t:'Now'}:null;
       const cards=noteCard?[offerCard,noteCard]:[offerCard];
       if(existing>=0){
-        setMsgs(ms=>ms.map((t,i)=>i!==existing?t:{...t,cv:[...t.cv,...cards],last:`Offered $${amount}`,time:'Now',unread:0}));
+        setMsgs(ms=>ms.map((t,i)=>i!==existing?t:{...t,cv:[...t.cv,...cards],last:`Offered $${safeAmt}`,time:'Now',unread:0}));
         setActiveMsgIdx(existing);
       }else{
-        const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:L.brand,m:L.model,p:L.price,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Offered $${amount}`,cv:cards};
+        const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:L.brand,m:L.model,p:L.price,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Offered $${safeAmt}`,cv:cards};
         setMsgs([newThread,...msgs]);setActiveMsgIdx(0);
       }
       setOfferOpen(null);setTab('messages');setView(null);return;
@@ -1810,12 +1875,12 @@ function App(){
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
     if(cErr){console.error('conv create',cErr);return;}
-    const payload={amount,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending'};
+    const payload={amount:safeAmt,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending'};
     const {data:msgRow,error:mErr}=await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'offer',payload}).select().single();
     if(mErr){console.error('offer msg',mErr);return;}
-    await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount,kind:'offer',note:note||null});
-    if(note&&note.trim()){
-      await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'text',body:note.trim()});
+    await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:safeAmt,kind:'offer',note:safeNote||null});
+    if(safeNote){
+      await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'text',body:safeNote});
     }
     await fetchConversations();
     setOfferOpen(null);setTab('messages');setView(null);
