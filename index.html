@@ -5,6 +5,8 @@
 input,textarea,select,button{font-family:inherit}
 input::placeholder,textarea::placeholder{color:#9CA3AF}
 @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 <div id="root"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -19,8 +21,31 @@ function memStorage(){const s={};return{getItem:k=>s[k]??null,setItem:(k,v)=>{s[
 let _store;try{window.localStorage.setItem('_sb','1');window.localStorage.removeItem('_sb');_store=window.localStorage;}catch(e){_store=memStorage();}
 const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,storage:_store}});
 const {useState,useRef,useEffect,useCallback}=React;
-const C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#4DA8FF',ok:'#6FCF97'};
+// --- THEME PALETTES ---
+// Light is default. Dark mode keeps the accent colors (lm/tl/am/pu/pk/cta/ok/rd) identical
+// so brand identity and semantic meaning (red=danger, green=success) carry over; only
+// the neutrals (bg, sf, cd, bd, tx, mt, dm) flip.
+const LIGHT_C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#4DA8FF',ok:'#6FCF97'};
+const DARK_C={bg:'#0F1419',sf:'#1A1F26',cd:'#1F252D',bd:'#2D3540',lm:'#5BB3FF',tx:'#E8EAED',mt:'#9AA5B1',dm:'#252B33',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#5BB3FF',ok:'#6FCF97'};
+let C={...LIGHT_C}; // mutated in-place on theme change so closures see new values
+const applyTheme=(mode)=>{const src=mode==='dark'?DARK_C:LIGHT_C;Object.keys(src).forEach(k=>{C[k]=src[k];});};
 const e=React.createElement;
+
+// --- PERSISTENT KV (uses same fallback as supabase auth) ---
+const kv={
+  get(k,def){try{const v=_store.getItem('dink:'+k);return v==null?def:JSON.parse(v);}catch{return def;}},
+  set(k,v){try{_store.setItem('dink:'+k,JSON.stringify(v));}catch{}},
+  del(k){try{_store.removeItem('dink:'+k);}catch{}},
+};
+
+// --- HAPTIC FEEDBACK ---
+// Subtle vibration on key interactions. No-op where unsupported (desktop, iOS Safari < 16.4).
+const haptic=(kind='light')=>{try{if(!navigator.vibrate)return;const d=kind==='heavy'?20:kind==='medium'?12:6;navigator.vibrate(d);}catch{}};
+
+// --- RECENTLY VIEWED ---
+const RECENT_KEY='recentViewed';const RECENT_MAX=10;
+const recentGet=()=>kv.get(RECENT_KEY,[]);
+const recentPush=(id)=>{if(id==null)return;const cur=recentGet().filter(x=>x!==id);cur.unshift(id);kv.set(RECENT_KEY,cur.slice(0,RECENT_MAX));};
 
 // --- SECURITY HELPERS ---
 // Allowlist of trusted hosts for any user-supplied photo URL.
@@ -412,6 +437,9 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
         e(Row,{key:'tm',label:'Trade matches',r:e(Tog,{on:s.notifTrades,onChange:()=>up('notifTrades',!s.notifTrades)})}),
         e(Row,{key:'ms',label:'Messages',r:e(Tog,{on:s.notifMessages,onChange:()=>up('notifMessages',!s.notifMessages)})}),
       ]),
+      e(Sec,{title:'APPEARANCE',key:'ap'},[
+        e(Row,{key:'dk',label:'Dark mode',desc:'Easier on the eyes at night',r:e(Tog,{on:s.darkMode,onChange:()=>up('darkMode',!s.darkMode)})}),
+      ]),
       e(Sec,{title:'PRIVACY & SAFETY',key:'pr'},[
         e(Row,{key:'lp',label:'Show exact location',desc:'Off shows only city',r:e(Tog,{on:s.preciseLoc,onChange:()=>up('preciseLoc',!s.preciseLoc)})}),
         e(Row,{key:'bl',label:'Blocked users',desc:`${s.blockedCt||0} blocked`,r:e('span',{style:{fontSize:13,color:C.mt}},'›')}),
@@ -440,21 +468,48 @@ function PriceComp({avgS,avgL,rng,userPrice}){
   ]);
 }
 
-function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide}){
+function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide,onEditListing,onDeleteListing,onMarkSold}){
   useEffect(()=>{
     if(L&&typeof L.id==='string')sb.rpc('increment_listing_views',{listing_uuid:L.id}).then(()=>{});
   },[L&&L.id]);
   const u=gU(L.sid);
   const [showMenu,setShowMenu]=useState(false);
-  const [showEditMsg,setShowEditMsg]=useState(false);
+  const [showEdit,setShowEdit]=useState(false);
+  const [confirmDel,setConfirmDel]=useState(false);
+  const [confirmSold,setConfirmSold]=useState(false);
+  const [photoIdx,setPhotoIdx]=useState(0);
+  const [photoLoaded,setPhotoLoaded]=useState({});
+  const [stillAvailSent,setStillAvailSent]=useState(false);
+  const touchStartX=useRef(null);
   const isMyListing=meId&&L.sid===meId;
+  const photos=L.photos||[];
+  // Reset photo index when the listing changes
+  useEffect(()=>{setPhotoIdx(0);setPhotoLoaded({});setStillAvailSent(false);},[L.id]);
   const handleShare=()=>{
+    haptic();
     const url=`${window.location.origin}${window.location.pathname}#listing-${L.id}`;
     if(navigator.share){navigator.share({title:`${L.brand} ${L.model}`,text:`Check out this ${L.brand} ${L.model} on DINK Exchange`,url}).catch(()=>{});}
     else{try{navigator.clipboard.writeText(url);showToast&&showToast('Link copied to clipboard');}catch(e){showToast&&showToast('Share unavailable');}}
   };
   const handleReport=()=>{setShowMenu(false);showToast&&showToast('Listing reported. Thanks for keeping DINK safe.');};
-  const handleStillAvailable=()=>{showToast&&showToast('Asked seller if still available');onMsg();};
+  const handleStillAvailable=()=>{
+    setShowMenu(false);
+    setStillAvailSent(true);
+    haptic();
+    showToast&&showToast('✓ Sent — seller will reply in chat');
+    onMsg();
+  };
+  // Photo carousel: swipe + dot tap
+  const onTouchStart=(ev)=>{touchStartX.current=ev.touches[0].clientX;};
+  const onTouchEnd=(ev)=>{
+    if(touchStartX.current==null||photos.length<=1)return;
+    const dx=ev.changedTouches[0].clientX-touchStartX.current;
+    if(Math.abs(dx)>40){
+      if(dx<0&&photoIdx<photos.length-1){setPhotoIdx(i=>i+1);haptic();}
+      else if(dx>0&&photoIdx>0){setPhotoIdx(i=>i-1);haptic();}
+    }
+    touchStartX.current=null;
+  };
   // Mutual followers: people I follow who also follow this seller
   const [mutual,setMutual]=useState(0);
   useEffect(()=>{
@@ -477,36 +532,44 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   sp.push(['Condition',clbl(L.cond)],['Posted',L.ago+' ago']);
   const similar=L.cat==='paddle'?findSimilar(L,4):[];
   const isTrade=L.type==='trade';
+  const currentPhoto=photos[photoIdx];
   return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
+    showEdit&&e(EditListingModal,{key:'edit',L,onClose:()=>setShowEdit(false),onSave:async(patch)=>{await onEditListing(L,patch);},showToast,showError:showToast}),
+    confirmDel&&e(ConfirmModal,{key:'cd',title:'Delete this listing?',body:'This permanently removes the listing for all buyers. This action cannot be undone.',confirmLabel:'Delete',cancelLabel:'Keep',danger:true,onCancel:()=>setConfirmDel(false),onConfirm:async()=>{setConfirmDel(false);await onDeleteListing(L);onBack();}}),
+    confirmSold&&e(ConfirmModal,{key:'cs',title:'Mark as sold?',body:'Buyers will no longer see this listing in feeds or search. You can still view it in your Profile.',confirmLabel:'Mark Sold',cancelLabel:'Cancel',onCancel:()=>setConfirmSold(false),onConfirm:async()=>{setConfirmSold(false);await onMarkSold(L);showToast&&showToast('Listing marked as sold');}}),
     e('div',{key:'hdr',style:{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,flexShrink:0,position:'relative'}},[
       e('button',{onClick:onBack,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:20,padding:0,width:24,lineHeight:1}},'←'),
       e('span',{style:{flex:1,fontSize:12,fontWeight:600,color:C.mt}},'Listing'),
       e('button',{key:'sh',onClick:handleShare,title:'Share',style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:12}},'⤴'),
-      e('button',{key:'sv',onClick:()=>onSave(L.id),style:{background:C.cd,border:`1px solid ${saved?C.lm:C.bd}`,borderRadius:8,color:saved?C.lm:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:13}},'♥'),
+      e('button',{key:'sv',onClick:()=>{haptic();onSave(L.id);},style:{background:C.cd,border:`1px solid ${saved?C.lm:C.bd}`,borderRadius:8,color:saved?C.lm:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:13}},'♥'),
       e('button',{key:'mo',onClick:()=>setShowMenu(s=>!s),style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:13}},'⋯'),
-      showMenu&&e('div',{key:'mn',style:{position:'absolute',top:42,right:14,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:6,zIndex:10,minWidth:170}},[
+      showMenu&&e('div',{key:'mn',style:{position:'absolute',top:42,right:14,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(0,0,0,0.18)',padding:6,zIndex:10,minWidth:170}},[
         isMyListing?[
-          e('button',{key:'ed',onClick:()=>{setShowMenu(false);setShowEditMsg(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✎ Edit listing'),
-          e('button',{key:'mk',onClick:()=>{setShowMenu(false);showToast&&showToast('Listing marked as sold');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✓ Mark as sold'),
-          e('button',{key:'dl',onClick:()=>{if(confirm('Delete this listing?')){setShowMenu(false);showToast&&showToast('Listing deleted');onBack();}},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'🗑 Delete'),
+          e('button',{key:'ed',onClick:()=>{setShowMenu(false);setShowEdit(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✎ Edit listing'),
+          !sold&&e('button',{key:'mk',onClick:()=>{setShowMenu(false);setConfirmSold(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'✓ Mark as sold'),
+          e('button',{key:'dl',onClick:()=>{setShowMenu(false);setConfirmDel(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'🗑 Delete'),
         ]:[
-          e('button',{key:'sa',onClick:()=>{setShowMenu(false);handleStillAvailable();},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'❓ Still available?'),
+          e('button',{key:'sa',disabled:stillAvailSent,onClick:handleStillAvailable,style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:stillAvailSent?'default':'pointer',fontSize:12,color:stillAvailSent?C.ok:C.tx,borderRadius:8,opacity:stillAvailSent?.8:1}},stillAvailSent?'✓ Sent to seller':'❓ Still available?'),
           e('button',{key:'sf',onClick:()=>{setShowMenu(false);onOpenSafety&&onOpenSafety();},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🛡️ Safe meet-up tips'),
           e('button',{key:'rp',onClick:handleReport,style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'🚩 Report listing'),
         ],
       ]),
-      showEditMsg&&e('div',{key:'em',style:{position:'absolute',top:42,right:14,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:14,zIndex:10,minWidth:220}},[
-        e('div',{style:{fontSize:11,color:C.tx,marginBottom:8,lineHeight:1.5}},'Edit your listing from the Profile → Listed tab.'),
-        e('button',{onClick:()=>setShowEditMsg(false),style:{background:C.lm,color:'#fff',border:'none',borderRadius:8,padding:'5px 12px',fontSize:10,fontWeight:700,cursor:'pointer'}},'Got it'),
-      ]),
     ]),
     e('div',{key:'sc',style:{flex:1,overflowY:'auto',paddingBottom:sold?14:90}},[
-      e('div',{key:'i',style:{height:200,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}},[
-        L.photos&&L.photos[0]?e('img',{src:L.photos[0],style:{width:'100%',height:'100%',objectFit:'cover'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'70',sz:108}):e('div',{style:{fontSize:64}},CI[L.cat]),
-        e('div',{style:{position:'absolute',bottom:9,left:9,fontSize:10,color:'#fff',background:'rgba(31,41,51,0.6)',borderRadius:8,padding:'3px 9px'}},`📍 ${L.dist}mi · ${L.loc}`),
+      e('div',{key:'i',onTouchStart,onTouchEnd,style:{height:200,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}},[
+        // Image, placeholder during load, or fallback paddle SVG
+        currentPhoto?[
+          !photoLoaded[photoIdx]&&e('div',{key:'sk',style:{position:'absolute',inset:0,background:`linear-gradient(90deg, ${C.dm} 0%, ${C.bd}80 50%, ${C.dm} 100%)`,backgroundSize:'200% 100%',animation:'shimmer 1.4s infinite'}}),
+          e('img',{key:'im',src:currentPhoto,onLoad:()=>setPhotoLoaded(p=>({...p,[photoIdx]:true})),style:{width:'100%',height:'100%',objectFit:'cover',opacity:photoLoaded[photoIdx]?1:0,transition:'opacity .2s'}}),
+        ]:L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'70',sz:108}):e('div',{style:{fontSize:64}},CI[L.cat]),
+        // Tap arrows (visible when >1 photo)
+        photos.length>1&&photoIdx>0&&e('button',{key:'pv',onClick:()=>{setPhotoIdx(i=>i-1);haptic();},style:{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2}},'‹'),
+        photos.length>1&&photoIdx<photos.length-1&&e('button',{key:'nx',onClick:()=>{setPhotoIdx(i=>i+1);haptic();},style:{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2}},'›'),
+        e('div',{key:'loc',style:{position:'absolute',bottom:9,left:9,fontSize:10,color:'#fff',background:'rgba(0,0,0,0.55)',borderRadius:8,padding:'3px 9px'}},`📍 ${L.dist}mi · ${L.loc}`),
         L.tag&&e('div',{key:'t',style:{position:'absolute',top:9,right:9}},[e(TP,{t:L.tag})]),
-        L.photos&&L.photos.length>1&&e('div',{key:'dots',style:{position:'absolute',bottom:9,left:'50%',transform:'translateX(-50%)',display:'flex',gap:5}},L.photos.map((_,i)=>e('div',{key:i,style:{width:6,height:6,borderRadius:'50%',background:i===0?C.lm:'rgba(255,255,255,0.3)'}}))),
-        sold&&e('div',{key:'so',style:{position:'absolute',inset:0,background:'rgba(31,41,51,0.85)',display:'flex',alignItems:'center',justifyContent:'center'}},[e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:36,marginBottom:6}},'🚫'),e('div',{style:{fontSize:18,fontWeight:900,color:'#fff',letterSpacing:.5}},'SOLD'),e('div',{style:{fontSize:10,color:'#E5E7EB',marginTop:2}},'No longer available')])]),
+        // Tappable dot indicators
+        photos.length>1&&e('div',{key:'dots',style:{position:'absolute',bottom:9,left:'50%',transform:'translateX(-50%)',display:'flex',gap:6,padding:'5px 9px',background:'rgba(0,0,0,0.35)',borderRadius:10}},photos.map((_,i)=>e('button',{key:i,onClick:()=>{setPhotoIdx(i);haptic();},style:{width:i===photoIdx?16:7,height:7,borderRadius:4,background:i===photoIdx?'#fff':'rgba(255,255,255,0.5)',border:'none',padding:0,cursor:'pointer',transition:'width .2s'}}))),
+        sold&&e('div',{key:'so',style:{position:'absolute',inset:0,background:'rgba(15,20,25,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:3}},[e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:36,marginBottom:6}},'🚫'),e('div',{style:{fontSize:18,fontWeight:900,color:'#fff',letterSpacing:.5}},'SOLD'),e('div',{style:{fontSize:10,color:'#E5E7EB',marginTop:2}},'No longer available')])]),
       ]),
       e('div',{key:'cnt',style:{padding:14,display:'flex',flexDirection:'column',gap:12}},[
         e('div',{key:'ti'},[
@@ -540,16 +603,16 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
           ]),
         ]),
         similar.length>0&&!sold&&e('div',{key:'sim'},[
-          e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:8}},[e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5}},'YOU MIGHT ALSO LIKE'),e('span',{style:{fontSize:10,color:C.lm,fontWeight:700,cursor:'pointer'}},'See all ›')]),
+          e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:8}},[e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5}},'YOU MIGHT ALSO LIKE'),e('span',{style:{fontSize:10,color:C.lm,fontWeight:700,cursor:'pointer'},onClick:onBack},'See all ›')]),
           e('div',{style:{display:'flex',gap:9,overflowX:'auto',paddingBottom:4}},similar.map(({l,m})=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148}},[e(LCard,{L:l,onView:()=>onView(l),saved:false,onSave:()=>{},showMatch:m})]))),
         ]),
         sold&&e('div',{key:'find',style:{padding:'14px 0',textAlign:'center'}},[e('div',{style:{fontSize:13,color:C.tx,marginBottom:8}},'Find similar paddles instead'),e('button',{onClick:onBack,style:{padding:'9px 18px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff'}},'Browse Available')]),
       ]),
     ]),
-    !sold&&e('div',{key:'ftr',style:{position:'absolute',bottom:0,left:0,right:0,padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7,boxShadow:`0 -4px 16px rgba(31,41,51,0.06)`}},[
-      isTrade?e('button',{onClick:onMsg,style:{flex:1,padding:'13px 0',borderRadius:11,background:C.tl,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'🔄 Propose Trade'):[
-        e('button',{key:'b',onClick:onBuyNow,style:{flex:2,padding:'13px 0',borderRadius:11,background:C.cta,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`Buy Now · $${L.price}`),
-        e('button',{key:'o',onClick:onMakeOffer,style:{flex:1,padding:'13px 0',borderRadius:11,background:'transparent',border:`1.5px solid ${C.lm}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.lm}},'Offer'),
+    !sold&&e('div',{key:'ftr',style:{position:'absolute',bottom:0,left:0,right:0,padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7,boxShadow:`0 -4px 16px rgba(0,0,0,0.08)`}},[
+      isTrade?e('button',{onClick:()=>{haptic('medium');onMsg();},style:{flex:1,padding:'13px 0',borderRadius:11,background:C.tl,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'🔄 Propose Trade'):[
+        e('button',{key:'b',onClick:()=>{haptic('medium');onBuyNow();},style:{flex:2,padding:'13px 0',borderRadius:11,background:C.cta,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`Buy Now · $${L.price}`),
+        e('button',{key:'o',onClick:()=>{haptic();onMakeOffer();},style:{flex:1,padding:'13px 0',borderRadius:11,background:'transparent',border:`1.5px solid ${C.lm}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.lm}},'Offer'),
       ],
       e('button',{key:'m',onClick:onMsg,title:'Message',style:{width:46,padding:'13px 0',borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:14,color:C.tx,flexShrink:0}},'💬'),
     ]),
@@ -599,6 +662,7 @@ function FilterPanel({onClose,onApply,filters,cat}){
       e(Sec,{title:'CONDITION',c:e(Pills,{opts:['All','Brand New','Like New','Good','Fair'],sel:f.cond,onSel:v=>up('cond',v)})}),
       e(Sec,{title:'TYPE',c:e(Pills,{opts:['All','Sale','Trade','Both'],sel:f.type,onSel:v=>up('type',v)})}),
       e(Sec,{title:`MAX PRICE — $${f.maxP}`,c:e('input',{type:'range',min:0,max:300,step:5,value:f.maxP,onChange:ev=>up('maxP',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
+      e(Sec,{title:`MAX DISTANCE — ${f.maxD}mi`,c:e('input',{type:'range',min:1,max:200,step:1,value:f.maxD,onChange:ev=>up('maxD',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
     ]),
     e('div',{key:'f',style:{padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:()=>{onApply(f);onClose();},style:{width:'100%',padding:'12px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:14,fontWeight:800,color:'#fff'}},'Apply Filters')]),
   ]);
@@ -613,11 +677,15 @@ function NotifPanel({onClose,onListing,onMsgs,onTrade,notifs,onMarkRead}){
   const unreadCt=notifs.filter(n=>n.unread).length;
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:16}},'←'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'Notifications'),unreadCt>0&&e('div',{style:{fontSize:9,color:C.lm,marginTop:1}},`${unreadCt} unread`)])]),
-    e('div',{key:'b',style:{flex:1,overflowY:'auto'}},notifs.map(n=>{const col=colMap[n.type]||C.tx;return e('div',{key:n.id,onClick:()=>handleTap(n),style:{padding:'12px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:11,background:n.unread?col+'08':'transparent'}},[e('div',{style:{width:36,height:36,borderRadius:'50%',background:col+'25',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,flexShrink:0}},n.ic),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:12,fontWeight:n.unread?700:600,color:C.tx}},n.title),e('span',{style:{fontSize:9,color:C.mt}},n.time)]),e('div',{style:{fontSize:11,color:n.unread?C.tx:C.mt,lineHeight:1.4}},n.msg),n.detail&&e('div',{style:{fontSize:10,color:col,fontWeight:700,marginTop:3}},n.detail)])]);})),
+    e('div',{key:'b',style:{flex:1,overflowY:'auto'}},notifs.length===0?e('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'60px 20px',gap:10}},[
+      e('div',{style:{fontSize:42,opacity:.5}},'🔔'),
+      e('div',{style:{fontSize:14,fontWeight:800,color:C.tx}},"You're all caught up"),
+      e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5}},"We'll let you know when there's wishlist matches, price drops, or new messages."),
+    ]):notifs.map(n=>{const col=colMap[n.type]||C.tx;return e('div',{key:n.id,onClick:()=>handleTap(n),style:{padding:'12px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:11,background:n.unread?col+'08':'transparent'}},[e('div',{style:{width:36,height:36,borderRadius:'50%',background:col+'25',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,flexShrink:0}},n.ic),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:12,fontWeight:n.unread?700:600,color:C.tx}},n.title),e('span',{style:{fontSize:9,color:C.mt}},n.time)]),e('div',{style:{fontSize:11,color:n.unread?C.tx:C.mt,lineHeight:1.4}},n.msg),n.detail&&e('div',{style:{fontSize:10,color:col,fontWeight:700,marginTop:3}},n.detail)])]);})),
   ]);
 }
 
-function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following}){
+function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading}){
   const [q,setQ]=useState('');
   const [refresh,setRefresh]=useState(false);
   let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
@@ -629,33 +697,42 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   const hot=pool.filter(l=>l.tag==='HOT');
   const order=['12h','6h','1d','2d','3d','5d','1w'];
   const newish=[...pool].sort((a,b)=>order.indexOf(a.ago)-order.indexOf(b.ago)).slice(0,4);
-  const SH=({title,sub,action})=>e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:9,padding:'0 14px'}},[e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,letterSpacing:-.2}},title),sub&&e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},sub)]),action&&e('span',{style:{fontSize:10,color:C.lm,fontWeight:700,cursor:'pointer'}},action)]);
+  // Recently-viewed: pulled from kv store, filtered against current pool
+  const recents=(recentlyViewed||[]).map(id=>LS.find(l=>l.id===id)).filter(Boolean).slice(0,8);
+  const handleRefresh=async()=>{
+    setRefresh(true);haptic();
+    try{if(onRefresh)await onRefresh();}catch{}
+    setRefresh(false);
+  };
+  const SH=({title,sub,action,onAction})=>e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:9,padding:'0 14px'}},[e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,letterSpacing:-.2}},title),sub&&e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},sub)]),action&&e('button',{onClick:onAction,style:{fontSize:10,color:C.lm,fontWeight:700,cursor:'pointer',background:'transparent',border:'none',padding:0}},action)]);
   return e('div',{style:{flex:1,overflowY:'auto'}},[
     refresh&&e('div',{key:'rf',style:{padding:'6px 0',textAlign:'center',background:C.sf,fontSize:10,color:C.lm,fontWeight:700}},'↻ Refreshing...'),
     e('div',{key:'h',style:{padding:'12px 14px 10px',background:C.sf}},[
       e('div',{key:'t',style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:11}},[
         e('div',null,[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:9,padding:'3px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:800,letterSpacing:.5,cursor:'pointer'}},locMode==='local'?'📍 MARYVILLE · 25mi ⇅':'🌎 ANYWHERE ⇅'),e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},locMode==='local'?'Maryville':'Anywhere'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listing${pool.length===1?'':'s'} ${q?'matching your search':'nearby'}`)]),
-        e('button',{onClick:()=>{setRefresh(true);setTimeout(()=>setRefresh(false),700);},style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:9,padding:'5px 9px',cursor:'pointer',color:C.mt,fontSize:13}},'↻'),
+        e('button',{onClick:handleRefresh,disabled:refresh,style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:9,padding:'5px 9px',cursor:refresh?'default':'pointer',color:C.mt,fontSize:13,opacity:refresh?.5:1}},e('span',{style:{display:'inline-block',animation:refresh?'spin 1s linear infinite':'none'}},'↻')),
       ]),
       e('div',{key:'s',style:{position:'relative'}},[e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:11}},'🔍'),e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Search paddles, brands, players...',style:{width:'100%',padding:'9px 11px 9px 31px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
     ]),
-    q&&pool.length===0&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
+    dataLoading&&pool.length===0&&e('div',{key:'sk',style:{paddingTop:14}},[e(ListingSkeleton)]),
+    q&&pool.length===0&&!dataLoading&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
       e('div',{style:{fontSize:36,opacity:.4}},'🔍'),
       e('div',{style:{fontSize:13,fontWeight:800,color:C.tx}},`No results for "${q}"`),
       e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,maxWidth:240}},locMode==='local'?'Try expanding to Anywhere, or save a wishlist to be notified when matches appear.':'Try a different brand or model name.'),
       locMode==='local'&&e('button',{onClick:onLocToggle,style:{padding:'7px 14px',borderRadius:10,background:C.lm+'15',border:`1px solid ${C.lm}40`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'🌎 Search Anywhere'),
     ]),
-    wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'⚡ Based on Your Wishlist',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e('div',{style:{fontSize:28}},'🔍'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e('span',{style:{color:C.tl,fontSize:18}},'›')])]),
-    fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'👥 From People You Follow',sub:'Listings from your trusted network'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'🆕 New Near You',sub:'Freshly listed in your area'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'🔥 Trending This Week',sub:'Most viewed near you'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},l.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
-    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'✓ Just Sold Near You',sub:'Real transactions in your community'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e('div',{style:{fontSize:9,color:C.mt}},`📍 ${s.dist}mi · ${s.ago} ago`)])))]),
+    recents.length>0&&!q&&e('div',{key:'rv',style:{paddingTop:14}},[e(SH,{title:'⏱ Recently Viewed',sub:'Pick up where you left off'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},recents.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:148}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
+    wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'⚡ Based on Your Wishlist',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e('div',{style:{fontSize:28}},'🔍'),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e('span',{style:{color:C.tl,fontSize:18}},'›')])]),
+    fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'👥 From People You Follow',sub:'Listings from your trusted network',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
+    newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'🆕 New Near You',sub:'Freshly listed in your area',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
+    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'🔥 Trending This Week',sub:'Most viewed near you',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},l.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e('span',{style:{fontSize:9,color:C.mt}},`📍 ${l.dist}mi`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
+    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'✓ Recently Sold Locally',sub:'Snapshot of recent deals near you'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e('div',{style:{fontSize:9,color:C.mt}},`📍 ${s.dist}mi · ${s.ago} ago`)])))]),
     e('div',{key:'cat',style:{paddingTop:16}},[e(SH,{title:'Shop by Category'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>{const ct=LS.filter(l=>l.cat===c.k.toLowerCase().replace('paddles','paddle').replace('bags','bag')).length;return e('div',{key:c.k,onClick:()=>onCatSelect(c.k),style:{flexShrink:0,width:108,height:128,borderRadius:13,background:`linear-gradient(160deg,${c.col}25,${c.col}08)`,border:`1px solid ${c.col}40`,padding:'12px 11px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between'}},[e('div',{style:{display:'flex',justifyContent:'space-between'}},[e('div',{style:{fontSize:34}},c.ic),e('div',{style:{fontSize:14,color:c.col,fontWeight:900}},'›')]),e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,marginBottom:1}},c.k),e('div',{style:{fontSize:9,color:C.mt}},`${ct} listings`)])]);}))]),
     e('div',{key:'br',style:{paddingTop:16,paddingBottom:18}},[e(SH,{title:'Popular Brands'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>{const ct=LS.filter(l=>l.brand===b.name).length;return e('div',{key:b.name,onClick:()=>onBrandSelect(b.name),style:{flexShrink:0,width:140,height:108,borderRadius:13,background:`linear-gradient(135deg,${b.col},${b.col}AA)`,padding:'11px 12px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between',position:'relative',overflow:'hidden'}},[e('div',{style:{position:'absolute',right:-12,bottom:-22,fontSize:80,opacity:.08,color:'#fff',fontWeight:900}},b.name.charAt(0)),e('div',{style:{position:'relative',zIndex:1}},[e('div',{style:{fontSize:14,fontWeight:900,color:'#fff',lineHeight:1.1,marginBottom:3}},b.name),e('div',{style:{fontSize:9,color:'#ffffffCC'}},b.sub)]),e('div',{style:{display:'flex',justifyContent:'space-between',position:'relative',zIndex:1}},[e('div',{style:{fontSize:10,color:'#fff',fontWeight:700,background:'rgba(0,0,0,0.25)',borderRadius:6,padding:'2px 7px'}},`${ct} items`),e('div',{style:{fontSize:14,color:'#fff',fontWeight:900}},'›')])]);}))]),
   ]);
 }
 
-function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,setFilters}){
+function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,setFilters,onLoadMore,hasMore}){
   const [q,setQ]=useState('');
   const [showPanel,setShowPanel]=useState(false);
   const [sort,setSort]=useState('dist');
@@ -701,6 +778,9 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
       ]),
       e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{width:30,height:30,borderRadius:'50%',background:isSv?C.lm+'20':C.sf,border:`1px solid ${isSv?C.lm:C.bd}`,color:isSv?C.lm:C.mt,fontSize:12,cursor:'pointer',flexShrink:0}},'♥'),
     ]);})),
+    R.length>0&&hasMore&&e('div',{key:'lm',style:{padding:'0 14px 16px',display:'flex',justifyContent:'center'}},[
+      e('button',{onClick:()=>onLoadMore&&onLoadMore(),style:{padding:'10px 22px',borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'Load more ↓'),
+    ]),
   ]);
 }
 
@@ -750,6 +830,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
   const [paySheet,setPaySheet]=useState(false);
   const [showConvMenu,setShowConvMenu]=useState(false);
   const [showSafety,setShowSafety]=useState(false);
+  const [confirmBlock,setConfirmBlock]=useState(false);
   const endR=useRef(null);
   useEffect(()=>{if(endR.current)endR.current.scrollIntoView({behavior:'smooth'});},[activeIdx,msgs]);
   useEffect(()=>{setShowConvMenu(false);},[activeIdx]);
@@ -777,6 +858,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       }
     };
     const acceptOffer=async(m)=>{
+      haptic('medium');
       // Optimistic UI
       setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,dealStatus:'accepted',cv:t.cv.map(x=>x===m?{...x,status:'accepted'}:x).concat([{f:'m',kind:'accept',amount:m.amount,listingRef:m.listingRef,t:'Now'}])}));
       // Persist if real conversation: find the offer record by message_id
@@ -806,8 +888,9 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🛡️ Safe meet-up tips'),
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('User reported. Thanks for keeping DINK safe.');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🚩 Report user'),
-        e('button',{onClick:()=>{setShowConvMenu(false);if(confirm('Block this user? They won\'t be able to message or see your listings.')){showToast&&showToast('User blocked');setActiveIdx(null);}},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'⛔ Block user'),
+        e('button',{onClick:()=>{setShowConvMenu(false);setConfirmBlock(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'⛔ Block user'),
       ]),
+      confirmBlock&&e(ConfirmModal,{key:'cbl',title:'Block this user?',body:"They won't be able to message you or see your listings. You can unblock from Settings → Privacy.",confirmLabel:'Block',cancelLabel:'Cancel',danger:true,onCancel:()=>setConfirmBlock(false),onConfirm:()=>{setConfirmBlock(false);showToast&&showToast('User blocked');setActiveIdx(null);}}),
       showSafety&&e(SafetyTipsModal,{key:'safety',onClose:()=>setShowSafety(false)}),
       e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e('span',{style:{fontSize:15}},'🔥'):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} ⇄ trade`:th.ref.m)]),th.dealStatus==='accepted'&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'✓ ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer})),e('div',{key:'end',ref:endR})]),
@@ -864,12 +947,17 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate}){
+function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
   const [showAddGear,setShowAddGear]=useState(false);
   const [showAddWish,setShowAddWish]=useState(false);
+  const [editingListing,setEditingListing]=useState(null);
+  const [confirmingDel,setConfirmingDel]=useState(null);
+  const [confirmingSold,setConfirmingSold]=useState(null);
+  const [editingBio,setEditingBio]=useState(false);
+  const [editingWishBudget,setEditingWishBudget]=useState(null);
 
   // Fetch gear + wishlist from DB when me is loaded
   useEffect(()=>{
@@ -915,6 +1003,10 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
   const delWish=async(wid)=>{
     setWish(ws=>ws.filter(x=>x.id!==wid));
     if(typeof wid==='string'&&me?.id)await sb.from('wishlist').delete().eq('id',wid).eq('user_id',me.id);
+  };
+  const setWishBudget=async(wid,maxP)=>{
+    setWish(ws=>ws.map(w=>w.id===wid?{...w,maxP}:w));
+    if(typeof wid==='string'&&me?.id)await sb.from('wishlist').update({max_price:maxP}).eq('id',wid).eq('user_id',me.id);
   };
 
   const MY_LS=[
@@ -978,8 +1070,8 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       ]),
       // Bio — subtle background, inline edit
       e('div',{key:'bio',style:{background:C.dm,borderRadius:10,padding:'9px 11px',marginBottom:10,display:'flex',alignItems:'flex-start',gap:8}},[
-        e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.55,flex:1}},M.bio),
-        e('button',{style:{background:'transparent',border:'none',color:C.mt,fontSize:10,cursor:'pointer',flexShrink:0,padding:0,marginTop:1}},'✎'),
+        e('div',{style:{fontSize:11,color:M.bio?C.tx:C.mt,lineHeight:1.55,flex:1,fontStyle:M.bio?'normal':'italic',cursor:'pointer'},onClick:()=>setEditingBio(true)},M.bio||'Add a short bio so other players know who you are…'),
+        e('button',{onClick:()=>setEditingBio(true),style:{background:'transparent',border:'none',color:C.lm,fontSize:11,cursor:'pointer',flexShrink:0,padding:0,marginTop:1,fontWeight:700}},'✎'),
       ]),
       // Trade matches (only when ready)
       tradeReady&&e('div',{key:'tm',onClick:onOpenMatches,style:{background:`linear-gradient(135deg,${C.lm}12,${C.tl}08)`,borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.lm}25`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
@@ -1029,7 +1121,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         wish.map((w,i)=>e('div',{key:w.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.tl}40`,padding:11,display:'flex',alignItems:'center',gap:9,marginBottom:9}},[
           e('div',{style:{width:24,height:24,borderRadius:'50%',background:C.tl+'30',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:900,color:C.tl,flexShrink:0}},i+1),
           e(PSv,{col:C.tl+'50',sz:30}),
-          e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.tl,fontWeight:800}},w.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},w.model),e('div',{style:{fontSize:9,color:C.mt}},`Max budget: $${w.maxP} ✎`)]),
+          e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.tl,fontWeight:800}},w.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},w.model),e('button',{onClick:()=>setEditingWishBudget(w),style:{fontSize:9,color:C.lm,background:'transparent',border:'none',cursor:'pointer',padding:0,fontWeight:600,marginTop:1}},`Max budget: ${w.maxP?'$'+w.maxP:'no limit'} ✎`)]),
           e('button',{onClick:()=>delWish(w.id),style:{background:C.rd+'20',border:`1px solid ${C.rd}40`,borderRadius:7,color:C.rd,fontSize:11,cursor:'pointer',padding:'4px 9px'}},'×'),
         ])),
         e('button',{onClick:()=>setShowAddWish(true),style:{width:'100%',marginTop:6,padding:'12px 0',borderRadius:11,border:`2px dashed ${C.tl}50`,background:'transparent',color:C.tl,fontSize:11,cursor:'pointer',fontWeight:700}},'+ Add to Wishlist'),
@@ -1049,19 +1141,25 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
           e('div',{onClick:()=>onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[e(PSv,{col:C.lm+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})])]),
           l.views>30&&l.saves===0&&e('div',{style:{fontSize:9,color:C.am,background:C.am+'15',padding:'5px 8px',borderRadius:7,marginBottom:6,lineHeight:1.4}},'💡 High views but no saves — try lowering the price to attract offers'),
           e('div',{style:{display:'flex',gap:5}},[
-            e('button',{onClick:()=>showToast&&showToast('Edit listing coming soon — for now, delete and re-post'),style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'✎ Edit'),
-            e('button',{onClick:()=>showToast&&showToast('Listing paused — hidden from buyers'),style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'⏸ Pause'),
-            e('button',{onClick:()=>{if(confirm('Delete this listing? This cannot be undone.')){showToast&&showToast('Listing deleted');}},style:{flex:1,padding:'6px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer'}},'🗑 Delete'),
+            e('button',{onClick:()=>setEditingListing(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'✎ Edit'),
+            e('button',{onClick:()=>setConfirmingSold(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.ok}40`,background:C.ok+'10',color:C.ok,fontSize:10,fontWeight:700,cursor:'pointer'}},'✓ Mark Sold'),
+            e('button',{onClick:()=>setConfirmingDel(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer'}},'🗑 Delete'),
           ]),
         ])),
         MY_LS.filter(l=>!l.active).length>0&&e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginTop:14,marginBottom:8}},'SOLD'),
         MY_LS.filter(l=>!l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.dm}`,padding:9,marginBottom:8}},[
           e('div',{style:{display:'flex',gap:9,alignItems:'center',marginBottom:6}},[e(PSv,{col:C.mt+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Sold ${l.soldDate} to ${l.soldTo}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${l.soldPrice}`),e('div',{style:{fontSize:9,color:C.ok,fontWeight:700}},'✓ SOLD')])]),
-          e('button',{onClick:()=>showToast&&showToast('Relisting form prefilled — review and post'),style:{width:'100%',padding:'6px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'↻ Relist'),
+          e('button',{onClick:()=>{onRelist&&onRelist(l);},style:{width:'100%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'↻ Relist'),
         ])),
       ]),
       tab==='community'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
     ]),
+    // --- Modals owned by ProfileTab ---
+    editingListing&&e(EditListingModal,{key:'el',L:editingListing,onClose:()=>setEditingListing(null),onSave:async(patch)=>{if(onEditListing)await onEditListing(editingListing,patch);},showToast,showError:showToast}),
+    confirmingDel&&e(ConfirmModal,{key:'cdl',title:'Delete this listing?',body:'This permanently removes the listing. This action cannot be undone.',confirmLabel:'Delete',cancelLabel:'Keep',danger:true,onCancel:()=>setConfirmingDel(null),onConfirm:async()=>{const t=confirmingDel;setConfirmingDel(null);if(onDeleteListing)await onDeleteListing(t);showToast&&showToast('Listing deleted');}}),
+    confirmingSold&&e(ConfirmModal,{key:'cms',title:'Mark as sold?',body:'Buyers will no longer see this listing in feeds or search.',confirmLabel:'Mark Sold',cancelLabel:'Cancel',onCancel:()=>setConfirmingSold(null),onConfirm:async()=>{const t=confirmingSold;setConfirmingSold(null);if(onMarkSold)await onMarkSold(t);showToast&&showToast('Listing marked as sold');}}),
+    editingBio&&e(BioEditModal,{key:'eb',initial:M.bio||'',onClose:()=>setEditingBio(false),onSave:async(bio)=>{if(onUpdateBio)await onUpdateBio(bio);},showToast}),
+    editingWishBudget&&e(WishlistBudgetEditModal,{key:'ewb',wish:editingWishBudget,onClose:()=>setEditingWishBudget(null),onSave:setWishBudget,showToast}),
   ]),
   ]);
 }
@@ -1115,8 +1213,8 @@ function ActivityFeed({items,onView,emptyMsg}){
     e('span',{key:'g',style:{fontSize:14,color:C.mt}},'›'),
   ])));}
 
-function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide}){
-  const [f,setF]=useState({cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true});
+function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}){
+  const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',willTrade:false,negotiable:true}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true});
   const [busy,setBusy]=useState(false);
   const [photos,setPhotos]=useState([]); // [{file, preview}]
   const fileRef=useRef(null);
@@ -1412,8 +1510,8 @@ function OnboardingBanner({step,onComplete,onSkip,onOpenSettings,onOpenGear}){
 
 function Toast({msg,onDismiss}){
   useEffect(()=>{const t=setTimeout(onDismiss,2800);return()=>clearTimeout(t);},[onDismiss]);
-  return e('div',{style:{position:'absolute',bottom:80,left:14,right:14,zIndex:40,display:'flex',justifyContent:'center',pointerEvents:'none'}},[
-    e('div',{style:{background:C.tx,color:'#fff',borderRadius:12,padding:'10px 16px',fontSize:12,fontWeight:600,boxShadow:'0 8px 24px rgba(0,0,0,0.18)',animation:'slideUp .25s',maxWidth:300,textAlign:'center'}},msg),
+  return e('div',{style:{position:'absolute',bottom:100,left:14,right:14,zIndex:40,display:'flex',justifyContent:'center',pointerEvents:'none'}},[
+    e('div',{style:{background:C.tx===LIGHT_C.tx?C.tx:'#3A4452',color:'#fff',borderRadius:12,padding:'10px 16px',fontSize:12,fontWeight:600,boxShadow:'0 8px 24px rgba(0,0,0,0.25)',animation:'slideUp .25s',maxWidth:300,textAlign:'center'}},msg),
   ]);
 }
 
@@ -1425,6 +1523,121 @@ function ErrorBanner({msg,onDismiss}){
   ]);
 }
 
+// --- Custom confirm replacement (replaces native window.confirm) ---
+// Renders a centered modal with title, body, and configurable CTAs.
+function ConfirmModal({title,body,confirmLabel,cancelLabel,danger,onConfirm,onCancel}){
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:16,padding:20,maxWidth:320,width:'100%',animation:'slideUp .2s',border:`1px solid ${C.bd}`}},[
+      e('div',{key:'t',style:{fontSize:15,fontWeight:900,color:C.tx,marginBottom:6}},title),
+      body&&e('div',{key:'b',style:{fontSize:12,color:C.mt,lineHeight:1.55,marginBottom:16}},body),
+      e('div',{key:'a',style:{display:'flex',gap:8}},[
+        e('button',{key:'c',onClick:onCancel,style:{flex:1,padding:'11px 0',borderRadius:11,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.mt}},cancelLabel||'Cancel'),
+        e('button',{key:'ok',onClick:()=>{haptic('medium');onConfirm();},style:{flex:1,padding:'11px 0',borderRadius:11,background:danger?C.rd:C.lm,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff'}},confirmLabel||'Confirm'),
+      ]),
+    ]),
+  ]);
+}
+
+// --- Edit listing modal ---
+// Lets sellers update price, condition, description on existing listings.
+function EditListingModal({L,onClose,onSave,showToast,showError}){
+  const [price,setPrice]=useState(String(L.price||''));
+  const [cond,setCond]=useState(L.cond>=10?'Brand New':L.cond>=9?'Like New':L.cond>=7?'Good':L.cond>=5?'Fair':'Heavy Use');
+  const [desc,setDesc]=useState(L.desc||'');
+  const [busy,setBusy]=useState(false);
+  const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
+  const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
+  const valid=price&&desc;
+  const submit=async()=>{
+    if(!valid||busy)return;
+    const safePrice=safeMoney(price);
+    if(safePrice==null){showError&&showError('Price must be a valid amount under $100,000');return;}
+    setBusy(true);
+    try{
+      await onSave({price:safePrice,cond,desc:sanitizeText(desc,2000)});
+      showToast&&showToast('Listing updated');
+      onClose();
+    }catch(err){showError&&showError('Could not update listing. Try again.');}
+    setBusy(false);
+  };
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:40}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:20,borderTopRightRadius:20,padding:18,maxHeight:'85%',overflowY:'auto',animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},[
+        e('div',null,[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'Edit Listing'),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},`${L.brand} ${L.model}`)]),
+        e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕'),
+      ]),
+      e('div',{key:'p',style:{marginBottom:11}},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700}},'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:price,onChange:ev=>setPrice(ev.target.value),type:'number',style:{...IS,paddingLeft:24}})])]),
+      e('div',{key:'c',style:{marginBottom:11}},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700}},'CONDITION'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>setCond(cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${cond===cc?C.lm:C.bd}`,background:cond===cc?C.lm+'20':'transparent',color:cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc)))]),
+      e('div',{key:'d',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700}},'DESCRIPTION'),e('textarea',{value:desc,onChange:ev=>setDesc(ev.target.value),rows:3,style:{...IS,resize:'vertical',lineHeight:1.5}})]),
+      e('button',{onClick:submit,disabled:!valid||busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:(valid&&!busy)?C.lm:C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:13,fontWeight:800,color:'#fff'}},busy?'Saving...':'Save Changes'),
+    ]),
+  ]);
+}
+
+// --- Inline bio editor ---
+function BioEditModal({initial,onClose,onSave,showToast}){
+  const [bio,setBio]=useState(initial||'');
+  const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    setBusy(true);
+    try{await onSave(sanitizeText(bio,500));showToast&&showToast('Bio updated');onClose();}
+    catch{}
+    setBusy(false);
+  };
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:40}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:20,borderTopRightRadius:20,padding:18,animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},[
+        e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'Edit Bio'),
+        e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕'),
+      ]),
+      e('textarea',{key:'t',value:bio,onChange:ev=>setBio(ev.target.value),placeholder:'Tell other players who you are, what you play, how to meet you...',rows:5,maxLength:500,style:{width:'100%',padding:'11px 12px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:12,outline:'none',resize:'none',lineHeight:1.5,marginBottom:6}}),
+      e('div',{key:'ct',style:{fontSize:9,color:C.mt,textAlign:'right',marginBottom:12}},`${bio.length}/500`),
+      e('button',{onClick:submit,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:busy?'default':'pointer',fontSize:13,fontWeight:800,color:'#fff'}},busy?'Saving...':'Save Bio'),
+    ]),
+  ]);
+}
+
+// --- Inline budget editor for wishlist items ---
+function WishlistBudgetEditModal({wish,onClose,onSave,showToast}){
+  const [val,setVal]=useState(wish.maxP==null?'':String(wish.maxP));
+  const [busy,setBusy]=useState(false);
+  const IS={width:'100%',padding:'10px 11px 10px 24px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:13,outline:'none'};
+  const submit=async()=>{
+    setBusy(true);
+    const safe=val===''?null:safeMoney(val);
+    try{await onSave(wish.id,safe);showToast&&showToast('Budget updated');onClose();}catch{}
+    setBusy(false);
+  };
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:40,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:16,padding:18,width:'100%',maxWidth:320,animation:'slideUp .2s'}},[
+      e('div',{key:'h',style:{fontSize:14,fontWeight:900,color:C.tx,marginBottom:3}},'Update Max Budget'),
+      e('div',{key:'sub',style:{fontSize:10,color:C.mt,marginBottom:12}},`${wish.brand} ${wish.model}`),
+      e('div',{key:'in',style:{position:'relative',marginBottom:14}},[
+        e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.tl,fontWeight:800,fontSize:14}},'$'),
+        e('input',{value:val,onChange:ev=>setVal(ev.target.value),type:'number',placeholder:'Leave blank for no limit',style:IS}),
+      ]),
+      e('div',{key:'btns',style:{display:'flex',gap:8}},[
+        e('button',{onClick:onClose,style:{flex:1,padding:'11px 0',borderRadius:11,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.mt}},'Cancel'),
+        e('button',{onClick:submit,disabled:busy,style:{flex:1,padding:'11px 0',borderRadius:11,background:busy?C.dm:C.tl,border:'none',cursor:busy?'default':'pointer',fontSize:12,fontWeight:800,color:'#fff'}},busy?'...':'Save'),
+      ]),
+    ]),
+  ]);
+}
+
+// --- Loading skeleton for listings (used while fetchListings is in flight) ---
+function ListingSkeleton(){
+  const shimmer={background:`linear-gradient(90deg, ${C.dm} 0%, ${C.bd}80 50%, ${C.dm} 100%)`,backgroundSize:'200% 100%',animation:'shimmer 1.4s infinite'};
+  const Row=()=>e('div',{style:{background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:10,display:'flex',gap:11,alignItems:'center'}},[
+    e('div',{key:'i',style:{width:60,height:60,borderRadius:10,...shimmer,flexShrink:0}}),
+    e('div',{key:'b',style:{flex:1,display:'flex',flexDirection:'column',gap:5}},[
+      e('div',{style:{width:'40%',height:9,borderRadius:4,...shimmer}}),
+      e('div',{style:{width:'75%',height:13,borderRadius:4,...shimmer}}),
+      e('div',{style:{width:'55%',height:9,borderRadius:4,...shimmer}}),
+    ]),
+  ]);
+  return e('div',{style:{display:'flex',flexDirection:'column',gap:9,padding:'0 14px'}},[0,1,2,3].map(i=>e('div',{key:i},[Row()])));
+}
+
 function App(){
   const [authState,setAuthState]=useState('loading');
   const [me,setMe]=useState(null);
@@ -1433,15 +1646,17 @@ function App(){
   const [saved,setSaved]=useState([1,2,4,6,8]);
   const [savedMeta,setSavedMeta]=useState({}); // listing_id -> {prev_price, created_at}
   const [crt,setCrt]=useState(false);
+  const [crtPrefill,setCrtPrefill]=useState(null); // for relist
   const [pst,setPst]=useState(false);
   const [matchOpen,setMatchOpen]=useState(false);
   const [notifOpen,setNotifOpen]=useState(false);
   const [savedOpen,setSavedOpen]=useState(false);
   const [settingsOpen,setSettingsOpen]=useState(false);
   const [offerOpen,setOfferOpen]=useState(null);
-  const [locMode,setLocMode]=useState('local');
-  const [marketCat,setMarketCat]=useState('All');
-  const [marketFilters,setMarketFilters]=useState({...initFilters});
+  const [locMode,setLocMode]=useState(()=>kv.get('locMode','local'));
+  const [marketCat,setMarketCat]=useState(()=>kv.get('marketCat','All'));
+  // Persisted Market filters — hydrated from kv on first render, then re-written by an effect below.
+  const [marketFilters,setMarketFilters]=useState(()=>{const stored=kv.get('marketFilters',null);return stored?{...initFilters,...stored}:{...initFilters};});
   const [msgs,setMsgs]=useState([...MSGS_INIT]);
   const [activeMsgIdx,setActiveMsgIdx]=useState(null);
   const demoUserList=(ids)=>ids.map(id=>US.find(u=>u.id===id)).filter(Boolean);
@@ -1457,13 +1672,26 @@ function App(){
   const [condGuideOpen,setCondGuideOpen]=useState(false);
   const [onboardStep,setOnboardStep]=useState(0);
   const [onboardDismissed,setOnboardDismissed]=useState(false);
+  // Theme: light by default, hydrated from kv. Triggers a render via themeTick so closures pick up the new C values.
+  const [themeMode,setThemeMode]=useState(()=>kv.get('themeMode','light'));
+  const [,setThemeTick]=useState(0);
+  useEffect(()=>{applyTheme(themeMode);kv.set('themeMode',themeMode);setThemeTick(t=>t+1);},[themeMode]);
+  // Recently viewed listing ids (hydrated from kv)
+  const [recentlyViewed,setRecentlyViewed]=useState(()=>recentGet());
   const showToast=useCallback((msg)=>setToast(msg),[]);
   const showError=useCallback((msg)=>setErrorMsg(msg),[]);
+
+  // Persist filters/location/category on change
+  useEffect(()=>{kv.set('locMode',locMode);},[locMode]);
+  useEffect(()=>{kv.set('marketCat',marketCat);},[marketCat]);
+  useEffect(()=>{kv.set('marketFilters',marketFilters);},[marketFilters]);
 
   // Keep module-level follow state in sync for LCard / helpers
   useEffect(()=>{FOLLOWING=new Set(following);},[following]);
   useEffect(()=>{FOLLOW_GRAPH[0]=new Set((followers||[]).map(u=>u.id));},[followers]);
-  const [settings,setSettings]=useState({name:ME.name,location:ME.loc,skill:ME.skill,cashapp:ME.cashapp,venmo:ME.venmo,notifWishlist:true,notifPriceDrops:true,notifTrades:true,notifMessages:true,preciseLoc:false,blockedCt:0});
+  const [settings,setSettings]=useState({name:ME.name,location:ME.loc,skill:ME.skill,cashapp:ME.cashapp,venmo:ME.venmo,notifWishlist:true,notifPriceDrops:true,notifTrades:true,notifMessages:true,preciseLoc:false,blockedCt:0,darkMode:themeMode==='dark'});
+  // Sync darkMode toggle <-> themeMode
+  useEffect(()=>{const target=settings.darkMode?'dark':'light';if(target!==themeMode)setThemeMode(target);},[settings.darkMode]);
 
   // --- AUTH + PROFILE LOAD ---
   const loadProfile=useCallback(async(userId)=>{
@@ -1489,6 +1717,7 @@ function App(){
             notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
             notifTrades:us.notif_trades,notifMessages:us.notif_messages,
             preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+            darkMode:themeMode==='dark',
           });
         }
       } else {
@@ -1514,10 +1743,10 @@ function App(){
 
   useEffect(()=>{
     let mounted=true;
-    // Safety timeout — if auth check takes >8s, bail to login screen
+    // Safety timeout — if auth check takes >4s, bail to login screen
     const failsafe=setTimeout(()=>{
       if(mounted)setAuthState(s=>s==='loading'?'out':s);
-    },8000);
+    },4000);
     sb.auth.getSession().then(async({data:{session}})=>{
       if(!mounted)return;
       try{
@@ -1546,21 +1775,26 @@ function App(){
   // --- LISTINGS FETCH ---
   const [dataVer,setDataVer]=useState(0);
   const [dataLoading,setDataLoading]=useState(false);
+  // Cursor-based pagination state. `listingsCursor` holds the oldest created_at we've fetched.
+  // `hasMoreListings` lets the UI hide the "Load more" affordance when we've reached the end.
+  const LISTINGS_PAGE_SIZE=50;
+  const [listingsCursor,setListingsCursor]=useState(null);
+  const [hasMoreListings,setHasMoreListings]=useState(true);
   const fetchListings=useCallback(async()=>{
     if(!me)return;
     setDataLoading(true);
     const meLL=(me.lat!=null&&me.lng!=null)?{lat:Number(me.lat),lng:Number(me.lng)}:null;
-    // Active listings with seller + paddle spec
+    // First page: 50 most recent listings (was 200 in one shot)
     const {data:rows,error}=await sb
       .from('listings')
       .select('*, seller:profiles!seller_id(*), paddle_spec:paddle_specs(*), photos:listing_photos(url,position)')
       .neq('status','deleted')
       .order('created_at',{ascending:false})
-      .limit(200);
-    if(error){console.error('listings fetch',error);setDataLoading(false);return;}
+      .limit(LISTINGS_PAGE_SIZE);
+    if(error){console.error('listings fetch',error);setDataLoading(false);showError('Could not load listings. Pull down to retry.');return;}
     if(!rows||rows.length===0){
       // No real listings yet — keep the demo data visible
-      setDataLoading(false);setDataVer(v=>v+1);return;
+      setDataLoading(false);setDataVer(v=>v+1);setHasMoreListings(false);return;
     }
     // Build users map from sellers
     const usersMap=new Map();
@@ -1587,9 +1821,40 @@ function App(){
       price:s.sold_price?Number(s.sold_price):s.price,
       orig:s.orig||s.price,dist:s.dist,ago:s.sold_at?timeAgo(s.sold_at):s.ago,loc:s.loc,
     }));
+    // Remember the oldest row's timestamp so loadMoreListings can paginate from there
+    const last=rows[rows.length-1];
+    setListingsCursor(last?.created_at||null);
+    setHasMoreListings(rows.length>=LISTINGS_PAGE_SIZE);
     setDataLoading(false);
     setDataVer(v=>v+1);
   },[me]);
+
+  // Append next page; called from a "Load more" affordance or infinite scroll trigger.
+  const loadMoreListings=useCallback(async()=>{
+    if(!me||!listingsCursor||!hasMoreListings)return;
+    const meLL=(me.lat!=null&&me.lng!=null)?{lat:Number(me.lat),lng:Number(me.lng)}:null;
+    const {data:rows,error}=await sb
+      .from('listings')
+      .select('*, seller:profiles!seller_id(*), paddle_spec:paddle_specs(*), photos:listing_photos(url,position)')
+      .neq('status','deleted')
+      .lt('created_at',listingsCursor)
+      .order('created_at',{ascending:false})
+      .limit(LISTINGS_PAGE_SIZE);
+    if(error){console.error('listings paginate',error);return;}
+    if(!rows||rows.length===0){setHasMoreListings(false);return;}
+    rows.forEach(r=>{
+      if(r.seller&&!US.find(u=>u.id===r.seller.id)){
+        const u=profileToUser(r.seller);
+        if(meLL&&u.lat!=null&&u.lng!=null){const d=haversineMi(meLL.lat,meLL.lng,u.lat,u.lng);if(d!=null)u.dist=Math.round(d*10)/10;}
+        US.push(u);
+      }
+      if(r.status!=='sold'){LS.push(mapListingRow(r,meLL));}
+    });
+    const last=rows[rows.length-1];
+    setListingsCursor(last?.created_at||null);
+    setHasMoreListings(rows.length>=LISTINGS_PAGE_SIZE);
+    setDataVer(v=>v+1);
+  },[me,listingsCursor,hasMoreListings]);
 
   useEffect(()=>{if(me)fetchListings();},[me,fetchListings]);
 
@@ -1660,6 +1925,7 @@ function App(){
   const toggleFollow=async(userId)=>{
     if(!userId||userId===me?.id)return;
     const isF=following.includes(userId);
+    haptic();
     // Optimistic update
     setFollowing(f=>isF?f.filter(x=>x!==userId):[...f,userId]);
     // Toast feedback
@@ -1692,20 +1958,76 @@ function App(){
   };
 
   // --- REALTIME SUBSCRIPTIONS ---
+  // The previous version fetched all 50 conversations on every message INSERT, which
+  // is wasteful and causes UI flicker. This version:
+  //   1. Appends new messages to the active conversation in place
+  //   2. Bumps the unread count on inactive conversations without refetching
+  //   3. Only does a full refetch if we receive a message for a thread we don't know yet
+  //   4. Listens to listing UPDATEs and detects price drops on saved listings,
+  //      then injects a synthetic "pricedrop" notification client-side. (Production
+  //      should also have a DB trigger — see SQL in comment block below.)
   useEffect(()=>{
     if(!me?.id)return;
+    const savedSet=new Set(saved.filter(x=>typeof x==='string'));
     const ch=sb.channel('user-'+me.id)
-      // New messages: refresh conversations
-      .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},()=>{
-        fetchConversations();
+      // New messages: append to the right thread in place
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},(payload)=>{
+        const m=payload.new;if(!m)return;
+        if(m.sender_id===me.id)return; // ignore my own optimistic echo
+        setMsgs(ms=>{
+          const i=ms.findIndex(t=>t.id===m.conversation_id);
+          if(i<0){fetchConversations();return ms;} // unknown thread — full refetch
+          const mapped=mapMessageRow(m,me.id);
+          const lastTxt=m.kind==='text'?(m.body||''):m.kind==='offer'?`Offered $${m.payload?.amount||''}`:m.kind==='buynow'?`Buy Now $${m.payload?.amount||''}`:m.kind==='accept'?`✓ Accepted $${m.payload?.amount||''}`:m.kind==='payment'?`Sent $${m.payload?.amount||''} via ${m.payload?.method||''}`:'[message]';
+          return ms.map((t,idx)=>idx!==i?t:{
+            ...t,cv:[...t.cv,mapped],last:lastTxt,time:'Now',
+            unread:idx===activeMsgIdx?0:(t.unread||0)+1,
+          });
+        });
       })
-      // Offer status changes: refresh
+      // Offer status changes: full refetch (less frequent, payload includes accepted flow)
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'offers'},()=>{
         fetchConversations();
       })
       // Conversation deal_status changes (e.g. other party accepted)
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'conversations'},()=>{
         fetchConversations();
+      })
+      // Listing updates: detect price drops on saved listings and notify locally
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'listings'},(payload)=>{
+        const n=payload.new,o=payload.old;if(!n||!o)return;
+        if(!savedSet.has(n.id))return;
+        const oldP=Number(o.price),newP=Number(n.price);
+        if(!isNaN(oldP)&&!isNaN(newP)&&newP<oldP){
+          // Refresh listings so the new price shows everywhere
+          fetchListings();
+          // Local notification — production should also fire a server-side trigger:
+          //
+          //   CREATE OR REPLACE FUNCTION notify_price_drop() RETURNS TRIGGER AS $$
+          //   BEGIN
+          //     IF NEW.price < OLD.price THEN
+          //       INSERT INTO notifications (user_id, type, title, message, listing_id, payload)
+          //       SELECT s.user_id, 'pricedrop',
+          //              'Price dropped on saved listing',
+          //              NEW.brand || ' ' || NEW.model || ' — now $' || NEW.price || ' (was $' || OLD.price || ')',
+          //              NEW.id, jsonb_build_object('old_price', OLD.price, 'new_price', NEW.price)
+          //         FROM saved_listings s WHERE s.listing_id = NEW.id;
+          //     END IF;
+          //     RETURN NEW;
+          //   END; $$ LANGUAGE plpgsql;
+          //
+          //   CREATE TRIGGER on_listing_price_drop AFTER UPDATE OF price ON listings
+          //     FOR EACH ROW EXECUTE FUNCTION notify_price_drop();
+          //
+          setNotifs(ns=>[{
+            id:'pd-'+n.id+'-'+Date.now(),type:'pricedrop',ic:'💰',
+            title:'Price drop on saved listing',
+            msg:`${n.brand} ${n.model} — now $${newP} (was $${oldP})`,
+            time:'Now',unread:true,listingId:n.id,
+            detail:`Save $${oldP-newP}`,
+          },...ns]);
+          showToast(`💰 Price drop: ${n.brand} ${n.model} — now $${newP}`);
+        }
       })
       // New notifications for me
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${me.id}`},(payload)=>{
@@ -1715,20 +2037,75 @@ function App(){
       })
       .subscribe();
     return()=>{sb.removeChannel(ch);};
-  },[me,fetchConversations]);
+  },[me,fetchConversations,activeMsgIdx,saved]);
 
   const togSv=async(id)=>{
     // For demo (integer ids), just toggle locally
     if(typeof id==='number'){setSaved(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);return;}
     if(!me?.id)return;
-    if(saved.includes(id)){
+    const wasSaved=saved.includes(id);
+    // Optimistic update — flip immediately, roll back if the DB write fails
+    if(wasSaved){
       setSaved(s=>s.filter(x=>x!==id));
-      await sb.from('saved_listings').delete().eq('user_id',me.id).eq('listing_id',id);
+      const {error}=await sb.from('saved_listings').delete().eq('user_id',me.id).eq('listing_id',id);
+      if(error){
+        // Rollback
+        setSaved(s=>s.includes(id)?s:[...s,id]);
+        showError('Could not unsave. Try again.');
+      }
     }else{
       setSaved(s=>[...s,id]);
-      const {data}=await sb.from('saved_listings').insert({user_id:me.id,listing_id:id}).select().single();
-      if(data)setSavedMeta(m=>({...m,[id]:{prev_price:data.prev_price,created_at:data.created_at}}));
+      const {data,error}=await sb.from('saved_listings').insert({user_id:me.id,listing_id:id}).select().single();
+      if(error){
+        // Rollback
+        setSaved(s=>s.filter(x=>x!==id));
+        showError('Could not save. Try again.');
+      }else if(data){
+        setSavedMeta(m=>({...m,[id]:{prev_price:data.prev_price,created_at:data.created_at}}));
+      }
     }
+  };
+
+  // --- LISTING CRUD HANDLERS ---
+  // Edit: update price/condition/desc on a listing the current user owns.
+  const condMap={'Brand New':10,'Like New':9,'Good':7,'Fair':5,'Heavy Use':3};
+  const handleEditListing=async(L,patch)=>{
+    if(!me?.id||typeof L.id!=='string')return; // demo data is read-only
+    const row={};
+    if(patch.price!=null)row.price=safeMoney(patch.price);
+    if(patch.cond)row.condition=condMap[patch.cond]||7;
+    if(patch.desc!=null)row.description=sanitizeText(patch.desc,2000);
+    const {error}=await sb.from('listings').update(row).eq('id',L.id).eq('seller_id',me.id);
+    if(error){showError('Could not save changes. Try again.');throw error;}
+    await fetchListings();
+  };
+  // Delete: soft-delete (set status='deleted'). Hidden from feeds via .neq('status','deleted') filter.
+  const handleDeleteListing=async(L)=>{
+    if(!me?.id||typeof L.id!=='string')return;
+    const {error}=await sb.from('listings').update({status:'deleted'}).eq('id',L.id).eq('seller_id',me.id);
+    if(error){showError('Could not delete listing. Try again.');return;}
+    await fetchListings();
+  };
+  // Mark sold: status='sold' + sold_at timestamp. Listing still shows in seller's "SOLD" tab.
+  const handleMarkSold=async(L)=>{
+    if(!me?.id||typeof L.id!=='string')return;
+    const {error}=await sb.from('listings').update({status:'sold',sold_at:new Date().toISOString()}).eq('id',L.id).eq('seller_id',me.id);
+    if(error){showError('Could not mark as sold. Try again.');return;}
+    await fetchListings();
+  };
+  // Relist: open the create overlay with key fields pre-filled from the sold listing.
+  const handleRelist=(L)=>{
+    setCrtPrefill({brand:L.brand,model:L.model,cat:L.cat||'paddle',cond:'Like New',desc:L.desc||''});
+    setCrt(true);
+    showToast('Review and post — fields pre-filled from previous listing');
+  };
+  // Update bio: writes to profiles, updates local me.
+  const handleUpdateBio=async(bio)=>{
+    if(!me?.id)return;
+    const safe=sanitizeText(bio,500);
+    setMe(m=>m?{...m,bio:safe}:m);
+    const {error}=await sb.from('profiles').update({bio:safe}).eq('id',me.id);
+    if(error){showError('Could not save bio. Try again.');throw error;}
   };
 
   // Fetch saved listings (DB) when me is loaded
@@ -1816,6 +2193,14 @@ function App(){
   };
   const goCat=(c)=>{setMarketCat(c);setMarketFilters({...initFilters});setTab('market');setView(null);};
   const goBrand=(b)=>{setMarketCat('All');setMarketFilters({...initFilters,brands:[b]});setTab('market');setView(null);};
+  // viewListing: open a listing AND push it to the recently-viewed list.
+  // Used everywhere a user opens a listing detail; setView is reserved for closing (setView(null)).
+  const viewListing=useCallback((L)=>{
+    if(!L)return;
+    recentPush(L.id);
+    setRecentlyViewed(recentGet());
+    setView(L);
+  },[]);
 
   // Buy Now flow — auto-message in chat
   // Buy Now / Make Offer — write to DB when seller is a real UUID; otherwise demo flow
@@ -1932,20 +2317,20 @@ function App(){
         condGuideOpen&&e(ConditionGuideModal,{key:'cguide',onClose:()=>setCondGuideOpen(false)}),
         buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
         reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{setReviewFor(null);showToast('Thanks for your review!');}}),
-        crt&&e(CrtOverlay,{onClose:()=>setCrt(false),onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true)}),
+        crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),prefill:crtPrefill}),
         matchOpen&&e(MatchOverlay,{onClose:()=>setMatchOpen(false),onChat:()=>setTab('messages')}),
-        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:setView,onMsgs:()=>setTab('messages'),onTrade:()=>setMatchOpen(true),notifs,onMarkRead:markNotifRead}),
-        savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);setView(l);},savedMeta}),
+        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),onTrade:()=>setMatchOpen(true),notifs,onMarkRead:markNotifRead}),
+        savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
         settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true)}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'🎉 Listing posted!')]),
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:setView,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true)}),
-          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:setView,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following}),
-          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:setView,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold}),
+          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading}),
+          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,onOpenReview:(L,seller)=>setReviewFor({L,seller})}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:setView,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true)}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio}),
         ],
       ]),
       !overlayOpen&&!view&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
