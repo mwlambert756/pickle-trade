@@ -651,7 +651,7 @@ function FilterPanel({onClose,onApply,filters,cat}){
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
   const togBrand=(b)=>setF(x=>({...x,brands:x.brands.includes(b)?x.brands.filter(y=>y!==b):[...x.brands,b]}));
   const reset=()=>setF({...initFilters});
-  const BRANDS=cat==='Paddles'?['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero']:['Asics','New Balance','Nike','Adidas','Selkirk'];
+  const BRANDS=cat==='Paddles'?['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson']:['Asics','New Balance','Nike','Adidas','Selkirk'];
   const Sec=({title,c})=>e('div',{style:{marginBottom:14}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:7}},title),c]);
   const Pills=({opts,sel,onSel,multi})=>e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},opts.map(o=>{const a=multi?sel.includes(o):sel===o;return e('button',{key:o,onClick:()=>onSel(o),style:{padding:'5px 10px',borderRadius:9,border:`1px solid ${a?C.lm:C.bd}`,background:a?C.lm+'20':C.cd,color:a?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},o);}));
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
@@ -925,7 +925,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   const [cond,setCond]=useState('Like New');
   const [maxP,setMaxP]=useState('');
   const [busy,setBusy]=useState(false);
-  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero'];
+  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson'];
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
   const valid=brand&&model&&(mode==='wish'||cond);
@@ -1228,7 +1228,7 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
   };
   const removePhoto=(idx)=>setPhotos(ps=>{URL.revokeObjectURL(ps[idx].preview);return ps.filter((_,i)=>i!==idx);});
   const CATS2=[{k:'paddle',l:'Paddle',ic:'🏓'},{k:'shoes',l:'Shoes',ic:'👟'},{k:'bag',l:'Bag',ic:'🎒'},{k:'apparel',l:'Apparel',ic:'👕'},{k:'accessories',l:'Accessory',ic:'⚡'}];
-  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Other'];
+  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson','Other'];
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
   const LS={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
