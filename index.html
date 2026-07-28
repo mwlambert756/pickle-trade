@@ -47,6 +47,154 @@ const RECENT_KEY='recentViewed';const RECENT_MAX=10;
 const recentGet=()=>kv.get(RECENT_KEY,[]);
 const recentPush=(id)=>{if(id==null)return;const cur=recentGet().filter(x=>x!==id);cur.unshift(id);kv.set(RECENT_KEY,cur.slice(0,RECENT_MAX));};
 
+// --- IMAGE COMPRESSION ---
+// Resize/compress a File to a JPEG blob (max edge ~1280px, quality 0.82) before upload.
+// Keeps storage costs low and uploads fast. Falls back to the original file on any error.
+function compressImage(file,maxEdge=1280,quality=0.82){
+  return new Promise((resolve)=>{
+    try{
+      if(!file||!file.type||!file.type.startsWith('image/'))return resolve(file);
+      const img=new Image();const url=URL.createObjectURL(file);
+      img.onload=()=>{
+        URL.revokeObjectURL(url);
+        let{width:w,height:h}=img;
+        if(Math.max(w,h)>maxEdge){const s=maxEdge/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s);}
+        const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        cv.toBlob(b=>{
+          if(!b)return resolve(file);
+          resolve(new File([b],(file.name||'photo').replace(/\.[^.]+$/,'')+'.jpg',{type:'image/jpeg'}));
+        },'image/jpeg',quality);
+      };
+      img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};
+      img.src=url;
+    }catch{resolve(file);}
+  });
+}
+
+// --- SEARCH HISTORY + AUTOCOMPLETE ---
+const SEARCH_KEY='searchHistory';const SEARCH_MAX=8;
+const SAVED_SEARCH_KEY='savedSearches';
+const searchHistGet=()=>kv.get(SEARCH_KEY,[]);
+const searchHistPush=(q)=>{const t=(q||'').trim();if(t.length<2)return;const cur=searchHistGet().filter(x=>x.toLowerCase()!==t.toLowerCase());cur.unshift(t);kv.set(SEARCH_KEY,cur.slice(0,SEARCH_MAX));};
+const searchHistClear=()=>kv.set(SEARCH_KEY,[]);
+const savedSearchesGet=()=>{const raw=kv.get(SAVED_SEARCH_KEY,[]);if(!Array.isArray(raw))return [];return raw.map((x,i)=>typeof x==='string'?{id:'legacy'+i,q:x,ctx:{}}:x).filter(x=>x&&x.q);};
+// Saved searches are stored as {id,q,ctx} so we can restore category + filters, not just the term.
+const savedSearchesAdd=(q,ctx)=>{
+  const t=(q||'').trim();if(!t)return;
+  const cur=savedSearchesGet().filter(x=>(x.q||'').toLowerCase()!==t.toLowerCase());
+  cur.unshift({id:'ss'+Date.now()+Math.floor(Math.random()*999),q:t,ctx:ctx||{},created:Date.now()});
+  kv.set(SAVED_SEARCH_KEY,cur.slice(0,12));
+};
+const savedSearchesDel=(id)=>kv.set(SAVED_SEARCH_KEY,savedSearchesGet().filter(x=>x.id!==id));
+// Autocomplete suggestions from the paddle DB + live listings. Returns up to `n` strings.
+function searchSuggest(q,n=6){
+  const t=(q||'').trim().toLowerCase();if(t.length<1)return [];
+  const pool=new Set();
+  Object.keys(PDB).forEach(k=>{const[b,m]=k.split(':');pool.add(b);pool.add(m);pool.add(`${b} ${m}`);});
+  (typeof LS!=='undefined'?LS:[]).forEach(l=>{pool.add(l.brand);pool.add(l.model);pool.add(`${l.brand} ${l.model}`);});
+  const arr=[...pool].filter(Boolean);
+  const starts=arr.filter(s=>s.toLowerCase().startsWith(t));
+  const contains=arr.filter(s=>!s.toLowerCase().startsWith(t)&&s.toLowerCase().includes(t));
+  return [...new Set([...starts,...contains])].slice(0,n);
+}
+
+// --- BROWSER NOTIFICATIONS (PWA-ready) ---
+// Requests Notification permission and shows a local notification. A full Web Push
+// pipeline also needs a service worker + VAPID server key (see SW registration below);
+// this client layer degrades gracefully when those aren't present.
+const pushPermGet=()=>{try{return (typeof Notification!=='undefined')?Notification.permission:'unsupported';}catch{return 'unsupported';}};
+async function pushRequest(){
+  try{
+    if(typeof Notification==='undefined')return 'unsupported';
+    if(Notification.permission==='granted')return 'granted';
+    const p=await Notification.requestPermission();return p;
+  }catch{return 'denied';}
+}
+function pushNotify(title,body,opts={}){
+  try{
+    if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
+    // Only surface OS notifications when the tab is hidden, to avoid double-notifying
+    if(document.visibilityState==='visible'&&!opts.force)return;
+    new Notification(title,{body,icon:opts.icon,tag:opts.tag,silent:!!opts.silent});
+  }catch{}
+}
+// Register a service worker if one is reachable (no-op in the sandboxed viewer).
+// In production, ship /sw.js alongside this file to enable installability + background push.
+function registerSW(){
+  try{
+    if(!('serviceWorker'in navigator))return;
+    navigator.serviceWorker.register('sw.js').catch(()=>{/* SW file not deployed yet — fine */});
+  }catch{}
+}
+
+// --- REVIEWS STORE ---
+// Reviews are keyed by seller id. Seeded with demo reviews; real reviews append here and
+// (for UUID sellers) should also persist to a `reviews` table server-side.
+const REVIEWS_KEY='reviews';
+const DEMO_REVIEWS={
+  1:[{r:5,t:'Smooth meet-up at the courts, paddle was exactly as described.',by:'Diana P.',ago:'1w'},{r:5,t:'Fast responder, fair price. Would buy again.',by:'Priya N.',ago:'3w'},{r:4,t:'Good deal, slight delay meeting up but all good.',by:'Travis H.',ago:'1mo'}],
+  4:[{r:5,t:'Top seller for a reason — pristine gear, zero hassle.',by:'Marcus W.',ago:'4d'},{r:5,t:'Brand new paddle, met same day. 10/10.',by:'Sarah C.',ago:'2w'}],
+  2:[{r:5,t:'Knowledgeable about specs, helped me pick the right grip.',by:'Jake M.',ago:'1w'}],
+  6:[{r:5,t:'Great communication, easy trade.',by:'Carlos R.',ago:'5d'}],
+};
+function reviewsFor(sid){
+  const stored=kv.get(REVIEWS_KEY,{});
+  const seeded=DEMO_REVIEWS[sid]||[];
+  const extra=stored[sid]||[];
+  return [...extra,...seeded];
+}
+function reviewAdd(sid,rating,text,by){
+  if(sid==null)return;
+  const stored=kv.get(REVIEWS_KEY,{});
+  const list=stored[sid]||[];
+  list.unshift({r:rating,t:(text||'').slice(0,400),by:by||'You',ago:'Now'});
+  stored[sid]=list;kv.set(REVIEWS_KEY,stored);
+}
+const reviewAvg=(sid)=>{const rv=reviewsFor(sid);if(!rv.length)return null;return Math.round((rv.reduce((a,b)=>a+b.r,0)/rv.length)*10)/10;};
+
+// --- PRICE HISTORY ---
+// Synthesizes a plausible price-history series for a listing (demo). Real listings should
+// log price changes to a `price_history` table; computeSavedStatus already tracks prev_price.
+function priceHistory(L){
+  if(!L||L.price==null)return [];
+  const cur=Number(L.price),orig=Number(L.orig||Math.round(cur*1.25));
+  const seedStr=`${L.brand}${L.model}${L.id}`;
+  let seed=0;for(let i=0;i<seedStr.length;i++)seed=(seed*31+seedStr.charCodeAt(i))%9973;
+  const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return (seed%1000)/1000;};
+  const pts=[];const steps=5;
+  for(let i=0;i<steps;i++){
+    const frac=i/(steps-1);
+    const base=orig+(cur-orig)*frac;
+    const jitter=i===0||i===steps-1?0:(rnd()-0.5)*orig*0.06;
+    pts.push(Math.max(1,Math.round(base+jitter)));
+  }
+  pts[pts.length-1]=cur;
+  const labels=['6w','4w','3w','2w','now'];
+  return pts.map((p,i)=>({label:labels[i]||'',price:p}));
+}
+
+// --- AUCTION HELPERS ---
+// Auction listings carry {auction:true, endsAt:isoString, bids:[{by,amount,t}]}.
+function auctionTimeLeft(endsAt){
+  if(!endsAt)return null;
+  const ms=new Date(endsAt).getTime()-Date.now();
+  if(ms<=0)return{ended:true,label:'Ended'};
+  const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);
+  const d=Math.floor(h/24);
+  if(d>0)return{ended:false,label:`${d}d ${h%24}h left`};
+  if(h>0)return{ended:false,label:`${h}h ${m}m left`};
+  return{ended:false,label:`${m}m left`};
+}
+const auctionTopBid=(L)=>{const b=L&&L.bids&&L.bids.length?L.bids:null;return b?Math.max(...b.map(x=>x.amount)):(L?L.price:0);};
+
+// --- DISTANCE → BEARING (for local map plotting) ---
+// Deterministic pseudo-bearing per listing so the local "map" is stable across renders.
+function listingBearing(L){
+  const s=`${L.brand}${L.id}`;let h=0;for(let i=0;i<s.length;i++)h=(h*17+s.charCodeAt(i))%360;
+  return h;
+}
+
 // --- SECURITY HELPERS ---
 // Allowlist of trusted hosts for any user-supplied photo URL.
 // Supabase Storage object URLs live under <project>.supabase.co/storage/v1/object/...
@@ -152,9 +300,15 @@ let LS=[
 {id:6,cat:'paddle',brand:'JOOLA',model:'Perseus CFS 16',price:165,orig:250,cond:10,sid:4,type:'sale',dist:0.8,grip:'4 1/8"',desc:'Brand new, never played.',saves:42,views:312,ago:'12h',loc:'Maryville',tag:'HOT'},
 {id:7,cat:'paddle',brand:'CRBN',model:'CRBN-1X',price:155,orig:200,cond:8,sid:7,type:'sale',dist:18.4,grip:'4 1/4"',desc:'Lightly played, comes with cover.',saves:8,views:62,ago:'2d',loc:'Sevierville',tag:null},
 {id:8,cat:'paddle',brand:'Six Zero',model:'Double Black Diamond',price:165,orig:200,cond:9,sid:8,type:'sale',dist:165.2,grip:'4 1/4"',desc:'Like new. Will ship for $10.',saves:5,views:41,ago:'3d',loc:'Nashville',tag:null},
-{id:101,cat:'shoes',brand:'Asics',model:'Gel-Rocket 11',price:45,orig:80,cond:8,sid:1,type:'sale',dist:1.2,sz:'10.5',gender:'Men',desc:'Worn 5 times.',saves:6,views:54,ago:'3d',loc:'Maryville',tag:null},
+{id:101,cat:'shoes',brand:'Asics',model:'Gel-Rocket 11',price:45,orig:80,cond:8,sid:1,type:'sale',dist:1.2,sz:'10.5',gender:'Mens',desc:'Worn 5 times.',saves:6,views:54,ago:'3d',loc:'Maryville',tag:null},
 {id:201,cat:'bag',brand:'Selkirk',model:'Pro Team Bag',price:65,orig:120,cond:9,sid:2,type:'sale',dist:3.4,btype:'Backpack',desc:'Fits 3 paddles.',saves:9,views:67,ago:'4d',loc:'Knoxville',tag:null},
 {id:401,cat:'accessories',brand:'Franklin',model:'X-40 Balls (6-pack)',price:15,orig:28,cond:10,sid:4,type:'sale',dist:0.8,desc:'Unopened.',saves:11,views:89,ago:'1d',loc:'Maryville',tag:'NEW'},
+// --- Auction listing: bids array drives the live bidding UI on LDetail ---
+{id:9,cat:'paddle',brand:'CRBN',model:'CRBN-1X',price:110,orig:200,cond:8,sid:6,type:'sale',dist:1.5,grip:'4 1/4"',desc:'Selling to the highest bidder — ends in 2 days. Cover included.',saves:19,views:151,ago:'8h',loc:'Maryville',tag:'HOT',
+ auction:true,endsAt:new Date(Date.now()+1000*60*60*46).toISOString(),
+ bids:[{by:'Travis H.',amount:120,t:'6h ago'},{by:'Sarah C.',amount:128,t:'2h ago'}]},
+{id:102,cat:'shoes',brand:'K-Swiss',model:'Express Light Pickleball',price:58,orig:110,cond:9,sid:6,type:'sale',dist:1.5,sz:'9',gender:'Womens',desc:'Only worn indoors a handful of times.',saves:4,views:38,ago:'2d',loc:'Maryville',tag:null},
+{id:301,cat:'apparel',brand:'Selkirk',model:'Pro Line Polo',price:28,orig:60,cond:9,sid:2,type:'sale',dist:3.4,sz:'L',gender:'Mens',desc:'Worn twice, no stains or pilling.',saves:3,views:29,ago:'4d',loc:'Knoxville',tag:null},
 ];
 LS.forEach(l=>{if(l.cat==='paddle'){const d=pdbGet(l.brand,l.model);if(d)Object.assign(l,{core:d.core,face:d.face,shape:d.shape,thk:d.thk,wt:d.wt,grLen:d.grLen,avgS:d.avgS,avgL:d.avgL,rng:d.rng});}});
 
@@ -248,6 +402,7 @@ function mapListingRow(row,meLatLng){
     cond:row.condition,sid:row.seller_id,type:row.type,
     dist:dist==null?0:Math.round(dist*10)/10,
     grip:row.grip,sz:row.size,gender:row.gender,btype:row.bag_type,
+    auction:!!row.is_auction,endsAt:row.auction_ends_at||null,bids:row.bids||[],
     desc:row.description||'',saves:row.saves_count||0,views:row.views||0,
     ago:timeAgo(row.created_at),loc:row.location||'',tag:row.tag,
     status:row.status,sold_price:row.sold_price,sold_to:row.sold_to,sold_at:row.sold_at,
@@ -315,7 +470,14 @@ const calcMatch=(a,b)=>{if(!a||!b)return 0;if(a.brand===b.brand&&a.model===b.mod
 const findSimilar=(target,n=4)=>!target?[]:LS.filter(l=>l.cat==='paddle'&&!(l.brand===target.brand&&l.model===target.model)).map(l=>({l,m:calcMatch(l,target)})).filter(x=>x.m>=50).sort((a,b)=>b.m-a.m).slice(0,n);
 const findWishMatches=()=>{const out=[];WISH.forEach(w=>LS.forEach(l=>{if(l.brand===w.brand&&l.model===w.model&&l.price<=w.maxP)out.push(l);}));return out;};
 
-function Av({u,sz=36,edit}){return e('div',{style:{position:'relative',flexShrink:0}},[e('div',{key:'a',style:{width:sz,height:sz,borderRadius:'50%',background:u.ac||C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:sz*.32,fontWeight:700,color:'#fff'}},u.ini),edit&&e('div',{key:'cm',style:{position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:C.lm,border:`2px solid ${C.sf}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,cursor:'pointer'}},'📷')]);}
+function Av({u,sz=36,edit,onEdit}){
+  const src=u&&(u.avatar||u.photo);
+  return e('div',{style:{position:'relative',flexShrink:0}},[
+    src?e('img',{key:'a',src,alt:'',style:{width:sz,height:sz,borderRadius:'50%',objectFit:'cover',display:'block'}})
+       :e('div',{key:'a',style:{width:sz,height:sz,borderRadius:'50%',background:(u&&u.ac)||C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:sz*.32,fontWeight:700,color:'#fff'}},u&&u.ini),
+    edit&&e('div',{key:'cm',onClick:ev=>{ev.stopPropagation();onEdit&&onEdit();},style:{position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:C.lm,border:`2px solid ${C.sf}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,cursor:'pointer'}},'📷')
+  ]);
+}
 function Tr({s}){const col=tcol(s);return e('div',{style:{display:'flex',alignItems:'center',gap:3,background:col+'20',borderRadius:10,padding:'2px 7px',border:`1px solid ${col}40`}},[e('span',{key:'i',style:{fontSize:9,color:col}},'⬡'),e('span',{key:'v',style:{fontSize:10,fontWeight:700,color:col}},s)]);}
 function St({r}){return e('span',{style:{fontSize:10,color:C.am}},('★'.repeat(Math.floor(r)))+'☆'.repeat(5-Math.floor(r)));}
 function FollowBtn({userId,following,onToggle,sz='sm'}){
@@ -398,7 +560,7 @@ function OfferOverlay({L,onClose,onSubmit}){
   ]);
 }
 
-function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety}){
+function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,pushOn,onTogglePush}){
   const [s,setS]=useState({...settings});
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
   const save=async()=>{
@@ -436,9 +598,13 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
         e(Row,{key:'pd',label:'Price drops',desc:'On listings you saved',r:e(Tog,{on:s.notifPriceDrops,onChange:()=>up('notifPriceDrops',!s.notifPriceDrops)})}),
         e(Row,{key:'tm',label:'Trade matches',r:e(Tog,{on:s.notifTrades,onChange:()=>up('notifTrades',!s.notifTrades)})}),
         e(Row,{key:'ms',label:'Messages',r:e(Tog,{on:s.notifMessages,onChange:()=>up('notifMessages',!s.notifMessages)})}),
+        e(Row,{key:'push',label:'Push notifications',desc:pushOn?'Enabled on this device':'Get alerts even when the app is closed',r:e('button',{onClick:()=>{if(!pushOn&&onTogglePush)onTogglePush();},style:{padding:'5px 12px',borderRadius:8,border:`1px solid ${pushOn?C.ok:C.lm}`,background:pushOn?C.ok+'15':C.lm,color:pushOn?C.ok:'#fff',fontSize:10,fontWeight:800,cursor:pushOn?'default':'pointer'}},pushOn?'✓ On':'Enable')}),
       ]),
       e(Sec,{title:'APPEARANCE',key:'ap'},[
         e(Row,{key:'dk',label:'Dark mode',desc:'Easier on the eyes at night',r:e(Tog,{on:s.darkMode,onChange:()=>up('darkMode',!s.darkMode)})}),
+      ]),
+      e(Sec,{title:'VERIFICATION',key:'vfy'},[
+        e(Row,{key:'ph',label:'Phone verification',desc:verified?'Your phone is confirmed':'Unlock the Verified badge',r:verified?e('span',{style:{fontSize:11,color:C.ok,fontWeight:800}},'✅ Verified'):e('button',{onClick:onOpenVerify,style:{padding:'5px 12px',borderRadius:8,border:'none',background:C.tl,color:'#fff',fontSize:10,fontWeight:800,cursor:'pointer'}},'Verify')}),
       ]),
       e(Sec,{title:'PRIVACY & SAFETY',key:'pr'},[
         e(Row,{key:'lp',label:'Show exact location',desc:'Off shows only city',r:e(Tog,{on:s.preciseLoc,onChange:()=>up('preciseLoc',!s.preciseLoc)})}),
@@ -468,7 +634,7 @@ function PriceComp({avgS,avgL,rng,userPrice}){
   ]);
 }
 
-function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide,onEditListing,onDeleteListing,onMarkSold}){
+function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide,onEditListing,onDeleteListing,onMarkSold,onOpenSeller}){
   useEffect(()=>{
     if(L&&typeof L.id==='string')sb.rpc('increment_listing_views',{listing_uuid:L.id}).then(()=>{});
   },[L&&L.id]);
@@ -480,11 +646,16 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   const [photoIdx,setPhotoIdx]=useState(0);
   const [photoLoaded,setPhotoLoaded]=useState({});
   const [stillAvailSent,setStillAvailSent]=useState(false);
+  const [bids,setBids]=useState(()=>(L.bids||[]).slice());
+  const [bidAmt,setBidAmt]=useState('');
+  const [,setTick]=useState(0);
   const touchStartX=useRef(null);
   const isMyListing=meId&&L.sid===meId;
   const photos=L.photos||[];
   // Reset photo index when the listing changes
-  useEffect(()=>{setPhotoIdx(0);setPhotoLoaded({});setStillAvailSent(false);},[L.id]);
+  useEffect(()=>{setPhotoIdx(0);setPhotoLoaded({});setStillAvailSent(false);setBids((L.bids||[]).slice());setBidAmt('');},[L.id]);
+  // Keep the auction countdown fresh without re-rendering the whole tree constantly
+  useEffect(()=>{if(!L.auction)return;const iv=setInterval(()=>setTick(t=>t+1),60000);return()=>clearInterval(iv);},[L.auction,L.id]);
   const handleShare=()=>{
     haptic();
     const url=`${window.location.origin}${window.location.pathname}#listing-${L.id}`;
@@ -532,6 +703,20 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   sp.push(['Condition',clbl(L.cond)],['Posted',L.ago+' ago']);
   const similar=L.cat==='paddle'?findSimilar(L,4):[];
   const isTrade=L.type==='trade';
+  const isAuction=!!L.auction;
+  const curTop=bids.length?Math.max(...bids.map(b=>b.amount)):L.price;
+  const auctionInfo=isAuction?auctionTimeLeft(L.endsAt):null;
+  const minNext=curTop+1;
+  const placeBid=()=>{
+    const amt=safeMoney(bidAmt);
+    if(amt==null){showToast&&showToast('Enter a valid bid amount');return;}
+    if(amt<minNext){showToast&&showToast(`Bid must be at least $${minNext}`);return;}
+    if(auctionInfo&&auctionInfo.ended){showToast&&showToast('This auction has ended');return;}
+    haptic('medium');
+    setBids(bs=>[...bs,{by:'You',amount:amt,t:'Just now'}]);
+    setBidAmt('');
+    showToast&&showToast(`🔨 Bid placed at $${amt}`);
+  };
   const currentPhoto=photos[photoIdx];
   return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
     showEdit&&e(EditListingModal,{key:'edit',L,onClose:()=>setShowEdit(false),onSave:async(patch)=>{await onEditListing(L,patch);},showToast,showError:showToast}),
@@ -585,14 +770,43 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
           e('div',{style:{flex:1}},[e('div',{style:{fontSize:11,fontWeight:800,color:L.price<L.avgS?C.ok:L.price>L.avgL?C.am:C.lm}},L.price<L.avgS?`Great deal — $${L.avgS-L.price} below avg`:L.price>L.avgL?`Above market — $${L.price-L.avgL} over avg`:'Fair price — typical for this paddle'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Avg sold $${L.avgS} · Avg listed $${L.avgL}`)]),
         ]),
         e('div',{key:'sp'},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3,marginBottom:6}},'SPECIFICATIONS'),e('div',{style:{background:C.sf,borderRadius:11,padding:11,display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},sp.map(([l,v])=>e('div',{key:l},[e('div',{style:{fontSize:9,color:C.mt,marginBottom:2}},l),e('div',{style:{fontSize:11,color:C.tx,fontWeight:600}},v||'—')])))]),
+        isAuction&&!sold&&e('div',{key:'auc',style:{background:C.am+'10',borderRadius:12,border:`1.5px solid ${C.am}45`,overflow:'hidden'}},[
+          e('div',{key:'ah',style:{padding:'7px 12px',background:C.am+'20',display:'flex',alignItems:'center',justifyContent:'space-between'}},[
+            e('span',{style:{fontSize:10,fontWeight:800,color:C.am,letterSpacing:.5}},'🔨 LIVE AUCTION'),
+            e('span',{style:{fontSize:10,fontWeight:800,color:auctionInfo&&auctionInfo.ended?C.rd:C.am}},auctionInfo?auctionInfo.label:''),
+          ]),
+          e('div',{key:'ab',style:{padding:'11px 12px'}},[
+            e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:9}},[
+              e('span',{style:{fontSize:9,color:C.mt,fontWeight:700}},bids.length?'CURRENT BID':'STARTING BID'),
+              e('span',{style:{fontSize:24,fontWeight:900,color:C.am}},`$${curTop}`),
+              e('span',{style:{fontSize:10,color:C.mt}},`${bids.length} bid${bids.length===1?'':'s'}`),
+            ]),
+            !(auctionInfo&&auctionInfo.ended)&&!isMyListing&&e('div',{style:{display:'flex',gap:6,marginBottom:bids.length?10:0}},[
+              e('div',{key:'in',style:{flex:1,position:'relative'}},[
+                e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',color:C.am,fontWeight:800,fontSize:13}},'$'),
+                e('input',{value:bidAmt,onChange:ev=>setBidAmt(ev.target.value),type:'number',placeholder:String(minNext),onKeyDown:ev=>{if(ev.key==='Enter')placeBid();},style:{width:'100%',padding:'9px 11px 9px 22px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:13,outline:'none'}}),
+              ]),
+              e('button',{key:'bb',onClick:placeBid,style:{padding:'9px 18px',borderRadius:10,background:C.am,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff',flexShrink:0}},'Place Bid'),
+            ]),
+            bids.length>0&&e('div',{style:{borderTop:`1px solid ${C.am}25`,paddingTop:8}},[
+              e('div',{style:{fontSize:9,color:C.mt,fontWeight:700,letterSpacing:.3,marginBottom:5}},'BID HISTORY'),
+              ...[...bids].sort((a,b)=>b.amount-a.amount).slice(0,5).map((b,i)=>e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'3px 0'}},[
+                e('span',{style:{fontSize:11,color:b.by==='You'?C.am:C.tx,fontWeight:b.by==='You'?800:500}},b.by),
+                e('div',{style:{display:'flex',alignItems:'center',gap:7}},[e('span',{style:{fontSize:9,color:C.mt}},b.t),e('span',{style:{fontSize:12,fontWeight:800,color:C.tx}},`$${b.amount}`)]),
+              ])),
+            ]),
+            e('div',{style:{fontSize:9,color:C.mt,marginTop:8,lineHeight:1.45}},'Highest bidder at close arranges pickup with the seller. Bids are commitments — only bid what you intend to pay.'),
+          ]),
+        ]),
+        L.cat==='paddle'&&!isTrade&&!isAuction&&e('div',{key:'ph'},[e(PriceHistoryChart,{L})]),
         e('div',{key:'desc'},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3,marginBottom:5}},'DESCRIPTION'),e('div',{style:{fontSize:12,color:C.tx,lineHeight:1.6}},L.desc)]),
         e('div',{key:'sl',style:{background:C.sf,borderRadius:11,padding:11}},[
           e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}},[e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3}},'SELLER'),e('span',{style:{fontSize:13,color:C.mt}},'›')]),
-          e('div',{style:{display:'flex',alignItems:'center',gap:10}},[
+          e('div',{onClick:()=>{if(onOpenSeller&&u.id!==meId&&u.id!==0)onOpenSeller(u);},style:{display:'flex',alignItems:'center',gap:10,cursor:(u.id!==meId&&u.id!==0)?'pointer':'default'}},[
             e(Av,{u,sz:42}),
             e('div',{style:{flex:1}},[
               e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),
-              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${u.rating} (${u.rev})`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:reviewAvg(u.id)||u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${reviewAvg(u.id)||u.rating} (${reviewsFor(u.id).length||u.rev})`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.lm:C.mt}},`· ${u.lastActive==='Now'?'🟢 Active now':u.lastActive}`)]),
               e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`📍 ${u.dist}mi · ⚡ ${u.resp} · ${u.sales} sales`),
             ]),
           ]),
@@ -651,7 +865,16 @@ function FilterPanel({onClose,onApply,filters,cat}){
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
   const togBrand=(b)=>setF(x=>({...x,brands:x.brands.includes(b)?x.brands.filter(y=>y!==b):[...x.brands,b]}));
   const reset=()=>setF({...initFilters});
-  const BRANDS=cat==='Paddles'?['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson']:['Asics','New Balance','Nike','Adidas','Selkirk'];
+  const BRAND_MAP={
+    'Paddles':['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson'],
+    'Shoes':['Asics','New Balance','Nike','Adidas','K-Swiss','Skechers','Fila'],
+    'Bags':['Selkirk','JOOLA','Franklin','Onix','Head','Vulcan'],
+    'Apparel':['Selkirk','JOOLA','Nike','Adidas','Franklin','Lululemon'],
+    'Accessories':['Franklin','Onix','Selkirk','Gamma','Tourna','Head'],
+  };
+  const BRANDS=BRAND_MAP[cat]||BRAND_MAP['Paddles'];
+  const SHOE_SZ=['All','7','7.5','8','8.5','9','9.5','10','10.5','11','11.5','12','13'];
+  const AP_SZ=['All','XS','S','M','L','XL','XXL'];
   const Sec=({title,c})=>e('div',{style:{marginBottom:14}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:7}},title),c]);
   const Pills=({opts,sel,onSel,multi})=>e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},opts.map(o=>{const a=multi?sel.includes(o):sel===o;return e('button',{key:o,onClick:()=>onSel(o),style:{padding:'5px 10px',borderRadius:9,border:`1px solid ${a?C.lm:C.bd}`,background:a?C.lm+'20':C.cd,color:a?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},o);}));
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
@@ -659,6 +882,15 @@ function FilterPanel({onClose,onApply,filters,cat}){
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},[
       e(Sec,{title:'BRAND',c:e(Pills,{opts:BRANDS,sel:f.brands,onSel:togBrand,multi:true})}),
       cat==='Paddles'&&[e(Sec,{key:'co',title:'CORE',c:e(Pills,{opts:['All','Polymer','Polypropylene','Nomex'],sel:f.core,onSel:v=>up('core',v)})}),e(Sec,{key:'fa',title:'FACE',c:e(Pills,{opts:['All','Raw T700 Carbon','Raw Carbon','Carbon Friction','Graphite','Composite'],sel:f.face,onSel:v=>up('face',v)})}),e(Sec,{key:'sh',title:'SHAPE',c:e(Pills,{opts:['All','Standard','Hybrid','Elongated'],sel:f.shape,onSel:v=>up('shape',v)})}),e(Sec,{key:'wt',title:'WEIGHT',c:e(Pills,{opts:['All','Light','Mid','Heavy'],sel:f.weight,onSel:v=>up('weight',v)})}),e(Sec,{key:'tk',title:'THICKNESS',c:e(Pills,{opts:['All','13mm','14mm','16mm'],sel:f.thk,onSel:v=>up('thk',v)})})],
+      cat==='Shoes'&&[
+        e(Sec,{key:'sg',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
+        e(Sec,{key:'ss',title:'SIZE',c:e(Pills,{opts:SHOE_SZ,sel:f.size,onSel:v=>up('size',v)})}),
+      ],
+      cat==='Apparel'&&[
+        e(Sec,{key:'ag',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
+        e(Sec,{key:'as',title:'SIZE',c:e(Pills,{opts:AP_SZ,sel:f.size,onSel:v=>up('size',v)})}),
+      ],
+      cat==='Bags'&&e(Sec,{key:'bt',title:'BAG TYPE',c:e(Pills,{opts:['All','Backpack','Duffel','Sling','Tote'],sel:f.btype,onSel:v=>up('btype',v)})}),
       e(Sec,{title:'CONDITION',c:e(Pills,{opts:['All','Brand New','Like New','Good','Fair'],sel:f.cond,onSel:v=>up('cond',v)})}),
       e(Sec,{title:'TYPE',c:e(Pills,{opts:['All','Sale','Trade','Both'],sel:f.type,onSel:v=>up('type',v)})}),
       e(Sec,{title:`MAX PRICE — $${f.maxP}`,c:e('input',{type:'range',min:0,max:300,step:5,value:f.maxP,onChange:ev=>up('maxP',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
@@ -685,7 +917,7 @@ function NotifPanel({onClose,onListing,onMsgs,onTrade,notifs,onMarkRead}){
   ]);
 }
 
-function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading}){
+function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch}){
   const [q,setQ]=useState('');
   const [refresh,setRefresh]=useState(false);
   let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
@@ -712,7 +944,7 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
         e('div',null,[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:9,padding:'3px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:800,letterSpacing:.5,cursor:'pointer'}},locMode==='local'?'📍 MARYVILLE · 25mi ⇅':'🌎 ANYWHERE ⇅'),e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},locMode==='local'?'Maryville':'Anywhere'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listing${pool.length===1?'':'s'} ${q?'matching your search':'nearby'}`)]),
         e('button',{onClick:handleRefresh,disabled:refresh,style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:9,padding:'5px 9px',cursor:refresh?'default':'pointer',color:C.mt,fontSize:13,opacity:refresh?.5:1}},e('span',{style:{display:'inline-block',animation:refresh?'spin 1s linear infinite':'none'}},'↻')),
       ]),
-      e('div',{key:'s',style:{position:'relative'}},[e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:11}},'🔍'),e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Search paddles, brands, players...',style:{width:'100%',padding:'9px 11px 9px 31px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
+      e('div',{key:'s'},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search paddles, brands, players…',onSaveSearch:(t)=>{savedSearchesAdd(t,{});onSavedSearch&&onSavedSearch(t);}})]),
     ]),
     dataLoading&&pool.length===0&&e('div',{key:'sk',style:{paddingTop:14}},[e(ListingSkeleton)]),
     q&&pool.length===0&&!dataLoading&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
@@ -732,17 +964,21 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   ]);
 }
 
-function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,setFilters,onLoadMore,hasMore}){
+function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,setFilters,onLoadMore,hasMore,showToast}){
   const [q,setQ]=useState('');
   const [showPanel,setShowPanel]=useState(false);
   const [sort,setSort]=useState('dist');
+  const [viewMode,setViewMode]=useState('list');
+  const [savedSearches,setSavedSearches]=useState(()=>savedSearchesGet());
+  const saveSearch=(term)=>{if(!term||!term.trim())return;savedSearchesAdd(term.trim(),{cat,filters});setSavedSearches(savedSearchesGet());showToast&&showToast('🔖 Search saved — we\'ll alert you on new matches');};
+  const delSearch=(id)=>{savedSearchesDel(id);setSavedSearches(savedSearchesGet());};
   const cMap={'Paddles':'paddle','Shoes':'shoes','Bags':'bag','Apparel':'apparel','Accessories':'accessories'};
   const fc=filterCount(filters);
   const cats=['All','Paddles','Shoes','Bags','Apparel','Accessories'];
   const catCount=(c)=>c==='All'?LS.length:LS.filter(l=>l.cat===cMap[c]).length;
   let R=[...LS];
   if(locMode==='local')R=R.filter(l=>l.dist<=filters.maxD);
-  if(q){const lq=q.toLowerCase();R=R.filter(l=>l.brand.toLowerCase().includes(lq)||l.model.toLowerCase().includes(lq));}
+  if(q){const lq=q.toLowerCase();R=R.filter(l=>[l.brand,l.model,l.desc,l.loc,CL[l.cat],(gU(l.sid)||{}).name].filter(Boolean).join(' ').toLowerCase().includes(lq));}
   if(cat!=='All')R=R.filter(l=>l.cat===cMap[cat]);
   if(filters.brands.length)R=R.filter(l=>filters.brands.includes(l.brand));
   if(filters.cond!=='All'){const cM={'Brand New':10,'Like New':9,'Good':7,'Fair':5};R=R.filter(l=>l.cond>=(cM[filters.cond]||0));}
@@ -754,6 +990,9 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   if(filters.shape!=='All')R=R.filter(l=>l.cat!=='paddle'||l.shape===filters.shape);
   if(filters.weight!=='All')R=R.filter(l=>l.cat!=='paddle'||wtClass(l.wt)===filters.weight);
   if(filters.thk!=='All')R=R.filter(l=>l.cat!=='paddle'||l.thk===filters.thk);
+  if(filters.gender&&filters.gender!=='All')R=R.filter(l=>(l.cat!=='shoes'&&l.cat!=='apparel')||l.gender===filters.gender||l.gender==='Unisex');
+  if(filters.size&&filters.size!=='All')R=R.filter(l=>(l.cat!=='shoes'&&l.cat!=='apparel')||String(l.sz)===String(filters.size));
+  if(filters.btype&&filters.btype!=='All')R=R.filter(l=>l.cat!=='bag'||l.btype===filters.btype);
   if(sort==='dist')R.sort((a,b)=>a.dist-b.dist);
   else if(sort==='price')R.sort((a,b)=>a.price-b.price);
   else if(sort==='new')R.sort((a,b)=>b.id-a.id);
@@ -762,14 +1001,20 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
     showPanel&&e(FilterPanel,{onClose:()=>setShowPanel(false),onApply:setFilters,filters,cat:cat==='All'?'Paddles':cat}),
     e('div',{key:'t',style:{padding:'10px 14px 0',background:C.sf,borderBottom:`1px solid ${C.dm}`}},[
       e('div',{style:{marginBottom:8}},[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:8,padding:'4px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:700,cursor:'pointer'}},locMode==='local'?`📍 Within ${filters.maxD}mi`:'🌎 Anywhere')]),
-      e('div',{style:{position:'relative',marginBottom:9}},[e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:11}},'🔍'),e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Search all gear...',style:{width:'100%',padding:'8px 11px 8px 31px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
+      e('div',{style:{marginBottom:9}},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search all gear, sellers, descriptions…',onSaveSearch:saveSearch})]),
+      savedSearches.length>0&&e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:8}},savedSearches.map(ss=>e('div',{key:ss.id,style:{display:'flex',alignItems:'center',gap:5,padding:'4px 8px',borderRadius:12,background:C.tl+'12',border:`1px solid ${C.tl}35`,flexShrink:0}},[
+        e('button',{key:'g',onClick:()=>{setQ(ss.q);if(ss.ctx&&ss.ctx.cat)setCat(ss.ctx.cat);if(ss.ctx&&ss.ctx.filters)setFilters({...initFilters,...ss.ctx.filters});},style:{background:'transparent',border:'none',color:C.tl,fontSize:10,fontWeight:700,cursor:'pointer',padding:0,whiteSpace:'nowrap'}},`🔖 ${ss.q}`),
+        e('button',{key:'x',onClick:()=>delSearch(ss.id),style:{background:'transparent',border:'none',color:C.mt,fontSize:10,cursor:'pointer',padding:0}},'✕'),
+      ]))),
       e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:9}},cats.map(cc=>{const ct=catCount(cc);return e('button',{key:cc,onClick:()=>setCat(cc),style:{padding:'5px 11px',borderRadius:14,border:'none',cursor:'pointer',background:cat===cc?C.lm:C.cd,color:cat===cc?'#fff':C.mt,fontSize:11,fontWeight:700,flexShrink:0,display:'flex',alignItems:'center',gap:5}},[cc,e('span',{style:{fontSize:9,opacity:.7}},ct)]);})),
     ]),
     e('div',{key:'fb',style:{padding:'7px 14px',background:C.bg,borderBottom:`1px solid ${C.dm}`,display:'flex',gap:5,alignItems:'center'}},[
       ...[['dist','Closest'],['new','Newest'],['price','Price ↑'],['pop','Popular']].map(([v,l])=>e('button',{key:v,onClick:()=>setSort(v),style:{padding:'5px 10px',borderRadius:11,border:'none',background:sort===v?C.lm:C.cd,color:sort===v?'#fff':C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},l)),
-      e('button',{onClick:()=>setShowPanel(true),style:{marginLeft:'auto',padding:'5px 11px',borderRadius:11,border:`1.5px solid ${fc>0?C.lm:C.bd}`,background:fc>0?C.lm+'20':C.cd,color:fc>0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:5}},[`⚙ Filters`,fc>0&&e('span',{style:{background:C.lm,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900}},fc)]),
+      e('button',{key:'vm',onClick:()=>setViewMode(v=>v==='list'?'map':'list'),style:{marginLeft:'auto',padding:'5px 10px',borderRadius:11,border:`1px solid ${viewMode==='map'?C.tl:C.bd}`,background:viewMode==='map'?C.tl+'18':C.cd,color:viewMode==='map'?C.tl:C.mt,fontSize:10,fontWeight:800,cursor:'pointer'}},viewMode==='map'?'☰ List':'🗺 Map'),
+      e('button',{onClick:()=>setShowPanel(true),style:{padding:'5px 11px',borderRadius:11,border:`1.5px solid ${fc>0?C.lm:C.bd}`,background:fc>0?C.lm+'20':C.cd,color:fc>0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:5}},[`⚙ Filters`,fc>0&&e('span',{style:{background:C.lm,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900}},fc)]),
     ]),
     e('div',{key:'rh',style:{padding:'8px 14px',display:'flex',justifyContent:'space-between'}},[e('span',{style:{fontSize:11,color:C.mt}},`${R.length} items found`),fc>0&&e('span',{style:{fontSize:10,color:C.lm,cursor:'pointer'},onClick:()=>setFilters({...initFilters})},'Clear filters')]),
+    viewMode==='map'&&R.length>0?e(LocalMap,{key:'map',listings:R,onView}):
     R.length===0?e('div',{key:'es',style:{padding:'40px 20px',textAlign:'center'}},[e('div',{style:{fontSize:42,marginBottom:11,opacity:.4}},'🔍'),e('div',{style:{fontSize:14,fontWeight:800,color:C.tx,marginBottom:5}},'No matches found'),e('div',{style:{fontSize:11,color:C.mt,marginBottom:14}},'Try broadening your search'),e('button',{onClick:()=>setFilters({...initFilters}),style:{padding:'9px 20px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'Clear filters')]):e('div',{style:{padding:'0 14px 16px',display:'flex',flexDirection:'column',gap:9}},R.map(l=>{const u=gU(l.sid);const isTr=l.type==='trade';const isSv=saved.includes(l.id);return e('div',{key:l.id,onClick:()=>onView(l),style:{background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:10,cursor:'pointer',display:'flex',gap:11,alignItems:'center'}},[
       e('div',{style:{width:60,height:60,background:C.sf,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:38}):e('div',{style:{fontSize:26}},CI[l.cat]),l.tag&&e('div',{style:{position:'absolute',top:-3,left:-3}},[e(TP,{t:l.tag})])]),
       e('div',{style:{flex:1,minWidth:0}},[
@@ -805,10 +1050,18 @@ function MatchOverlay({onClose,onChat}){
 
 function MsgCard({m,onAccept,onDecline,onCounter}){
   const isMine=m.f==='m';
+  const ActBtns=(extra)=>e('div',{style:{display:'flex',gap:5,marginTop:7}},[
+    e('button',{key:'a',onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff'}},extra&&extra.acceptLabel||'✓ Accept'),
+    e('button',{key:'d',onClick:()=>onDecline&&onDecline(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.rd}},'Decline'),
+    !(extra&&extra.noCounter)&&e('button',{key:'c',onClick:()=>onCounter&&onCounter(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.tx}},'Counter'),
+  ]);
   if(m.kind==='text')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'76%',padding:'7px 11px',borderRadius:13,background:isMine?C.lm:C.cd,color:isMine?'#fff':C.tx,fontSize:12,lineHeight:1.4,borderBottomRightRadius:isMine?2:13,borderBottomLeftRadius:isMine?13:2}},[m.msg,e('div',{style:{fontSize:9,opacity:.5,marginTop:2,display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3}},[m.t,isMine&&e('span',{style:{fontSize:10}},m.read?'✓✓':'✓')])])]);
-  if(m.kind==='offer'){const otherPrice=m.listingRef.p||0;const diff=otherPrice-m.amount;return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.am+'15',borderRadius:13,border:`1.5px solid ${C.am}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.am+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'💰'),e('span',{style:{fontSize:9,color:C.am,fontWeight:800,letterSpacing:.5}},`OFFER · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:6}},[e('span',{style:{fontSize:20,fontWeight:900,color:C.am}},`$${m.amount}`),e('span',{style:{fontSize:9,color:C.mt}},`from $${otherPrice}`),e('span',{style:{fontSize:9,color:C.ok,fontWeight:700}},`(-$${diff})`)]),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5,marginTop:7}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff'}},'✓ Accept'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.rd}},'Decline'),e('button',{style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.tx}},'Counter')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);}
-  if(m.kind==='buynow')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.lm+'12',borderRadius:13,border:`1.5px solid ${C.lm}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.lm+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'⚡'),e('span',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5}},`BUY NOW · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:11,color:C.tx,marginBottom:5}},'Buyer wants to purchase at full price'),e('div',{style:{fontSize:22,fontWeight:900,color:C.lm,marginBottom:6}},`$${m.amount}`),!isMine&&m.status==='pending'&&e('div',{style:{display:'flex',gap:5}},[e('button',{onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'7px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'✓ Accept Sale'),e('button',{style:{padding:'7px 14px',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:11,fontWeight:700,color:C.rd}},'Decline')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);
+  if(m.kind==='image')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'70%',borderRadius:13,overflow:'hidden',border:`1px solid ${C.bd}`,background:C.cd}},[e('img',{src:m.src,style:{width:'100%',display:'block',maxHeight:240,objectFit:'cover'}}),e('div',{style:{fontSize:9,opacity:.5,padding:'3px 8px',display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3,color:isMine?C.tx:C.mt}},[m.t,isMine&&e('span',{style:{fontSize:10}},m.read?'✓✓':'✓')])])]);
+  if(m.kind==='offer'||m.kind==='counter'){const otherPrice=m.listingRef.p||0;const diff=otherPrice-m.amount;const isCounter=m.kind==='counter';return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.am+'15',borderRadius:13,border:`1.5px solid ${C.am}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.am+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},isCounter?'↩️':'💰'),e('span',{style:{fontSize:9,color:C.am,fontWeight:800,letterSpacing:.5}},`${isCounter?'COUNTER':'OFFER'} · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:6}},[e('span',{style:{fontSize:20,fontWeight:900,color:C.am}},`$${m.amount}`),otherPrice>0&&e('span',{style:{fontSize:9,color:C.mt}},`from $${otherPrice}`),diff>0&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700}},`(-$${diff})`)]),!isMine&&m.status==='pending'&&ActBtns(),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);}
+  if(m.kind==='buynow')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.lm+'12',borderRadius:13,border:`1.5px solid ${C.lm}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.lm+'25',display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:10}},'⚡'),e('span',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5}},`BUY NOW · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:11,color:C.tx,marginBottom:5}},'Buyer wants to purchase at full price'),e('div',{style:{fontSize:22,fontWeight:900,color:C.lm,marginBottom:6}},`$${m.amount}`),!isMine&&m.status==='pending'&&ActBtns({acceptLabel:'✓ Accept Sale',noCounter:true}),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);
   if(m.kind==='accept')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.ok+'15',borderRadius:11,padding:'8px 13px',border:`1px solid ${C.ok}40`,textAlign:'center'}},[e('div',{style:{fontSize:10,fontWeight:800,color:C.ok}},'✓ DEAL ACCEPTED'),e('div',{style:{fontSize:11,color:C.tx,fontWeight:600,marginTop:2}},`$${m.amount} · ${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},'Coordinate meet-up & payment below')])]);
+  if(m.kind==='decline')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.rd+'12',borderRadius:11,padding:'7px 13px',border:`1px solid ${C.rd}30`,textAlign:'center'}},[e('div',{style:{fontSize:10,fontWeight:800,color:C.rd}},'✕ Offer declined'),m.amount&&e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},`$${m.amount}`)])]);
+  if(m.kind==='meetup')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.lm+'12',borderRadius:11,padding:'9px 13px',border:`1px solid ${C.lm}35`,textAlign:'center',maxWidth:'85%'}},[e('div',{style:{fontSize:10,fontWeight:800,color:C.lm,marginBottom:2}},'📍 MEET-UP PROPOSED'),e('div',{style:{fontSize:12,color:C.tx,fontWeight:700}},m.place),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},`${m.when} · ${m.time}`),e('div',{style:{fontSize:9,color:C.tl,marginTop:4}},'Reply to confirm or suggest another time')])]);
   if(m.kind==='payment')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.tl+'15',borderRadius:13,border:`1.5px solid ${C.tl}50`,padding:'9px 11px'}},[e('div',{style:{fontSize:9,color:C.tl,fontWeight:800,letterSpacing:.5,marginBottom:4}},`💸 SENT VIA ${m.method.toUpperCase()}`),e('div',{style:{fontSize:14,fontWeight:900,color:C.tx}},`$${m.amount}`),e('div',{style:{fontSize:9,color:C.mt}},`To ${m.handle}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])]);
   return null;
 }
@@ -831,18 +1084,36 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
   const [showConvMenu,setShowConvMenu]=useState(false);
   const [showSafety,setShowSafety]=useState(false);
   const [confirmBlock,setConfirmBlock]=useState(false);
+  const [counterFor,setCounterFor]=useState(null);
+  const [meetupOpen,setMeetupOpen]=useState(false);
+  const [disputeOpen,setDisputeOpen]=useState(false);
+  const [theyTyping,setTheyTyping]=useState(false);
   const endR=useRef(null);
-  useEffect(()=>{if(endR.current)endR.current.scrollIntoView({behavior:'smooth'});},[activeIdx,msgs]);
-  useEffect(()=>{setShowConvMenu(false);},[activeIdx]);
-  // Mark messages as read when thread opens
+  const imgRef=useRef(null);
+  const typingTimer=useRef(null);
+  useEffect(()=>{const n=endR.current;if(n&&typeof n.scrollIntoView==='function')n.scrollIntoView({behavior:'smooth'});},[activeIdx,msgs]);
+  useEffect(()=>{setShowConvMenu(false);setTheyTyping(false);},[activeIdx]);
+  useEffect(()=>()=>{if(typingTimer.current)clearTimeout(typingTimer.current);},[]);
+  // Mark messages as read when a thread opens — flips local ✓✓ receipts and persists read_at
   useEffect(()=>{
     if(activeIdx==null||!meId)return;
-    const th=msgs[activeIdx];if(!th||typeof th.id!=='string')return;
-    if((th.unread||0)>0){
-      sb.from('messages').update({read_at:new Date().toISOString()}).eq('conversation_id',th.id).neq('sender_id',meId).is('read_at',null).then(()=>{});
-      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,unread:0}));
+    const th=msgs[activeIdx];if(!th)return;
+    if((th.unread||0)>0||th.cv.some(c=>c.f!=='m'&&!c.read)){
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,unread:0,cv:t.cv.map(c=>c.f==='m'?c:{...c,read:true})}));
+      if(typeof th.id==='string'){
+        sb.from('messages').update({read_at:new Date().toISOString()}).eq('conversation_id',th.id).neq('sender_id',meId).is('read_at',null).then(()=>{});
+      }
     }
   },[activeIdx,meId]);
+  // Demo-only: simulate the other party typing, then marking my message read.
+  const pingTyping=useCallback(()=>{
+    setTheyTyping(true);
+    if(typingTimer.current)clearTimeout(typingTimer.current);
+    typingTimer.current=setTimeout(()=>{
+      setTheyTyping(false);
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,cv:t.cv.map(c=>c.f==='m'?{...c,read:true}:c)}));
+    },1800);
+  },[activeIdx,setMsgs]);
   const QR=['Still available?','Can you meet up?','Best price?'];
   if(activeIdx!==null){
     const th=msgs[activeIdx];
@@ -855,7 +1126,54 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       // Persist to DB if this is a real (UUID) conversation
       if(typeof th.id==='string'&&meId){
         await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'text',body:txt});
+      }else{pingTyping();}
+    };
+    // Compress locally, show instantly, then upload for real (UUID) conversations
+    const sendImage=async(file)=>{
+      if(!file)return;
+      if(!/^image\//.test(file.type)){showToast&&showToast('Please pick an image file');return;}
+      let blob=file,dataUrl='';
+      try{
+        blob=await compressImage(file,1280,.82);
+        dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
+      }catch(err){showToast&&showToast('Could not process that image');return;}
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:'📷 Photo',time:'Now',cv:[...t.cv,{f:'m',kind:'image',src:dataUrl,t:'Now'}]}));
+      if(typeof th.id==='string'&&meId){
+        try{
+          const path=`${th.id}/${Date.now()}.jpg`;
+          const {error:upErr}=await sb.storage.from('listing-photos').upload(path,blob,{contentType:'image/jpeg'});
+          if(!upErr){
+            const {data:pub}=sb.storage.from('listing-photos').getPublicUrl(path);
+            await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'image',payload:{url:pub&&pub.publicUrl}});
+          }
+        }catch(err){}
+      }else{pingTyping();}
+    };
+    const onPickImage=(ev)=>{const f=ev.target.files&&ev.target.files[0];if(ev.target)ev.target.value='';sendImage(f);};
+    const declineOffer=async(m)=>{
+      haptic('light');
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:'Offer declined',time:'Now',cv:t.cv.map(x=>x===m?{...x,status:'declined'}:x).concat([{f:'m',kind:'decline',amount:m.amount,t:'Now'}])}));
+      if(typeof th.id==='string'&&meId){
+        if(m.id){const {data:off}=await sb.from('offers').select('id').eq('message_id',m.id).maybeSingle();if(off)await sb.from('offers').update({status:'declined'}).eq('id',off.id);}
+        await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'decline',payload:{amount:m.amount}});
       }
+    };
+    const sendCounter=async(amt)=>{
+      const src=counterFor;setCounterFor(null);
+      if(!src||!amt)return;
+      haptic('medium');
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:`Countered $${amt}`,time:'Now',cv:t.cv.map(x=>x===src?{...x,status:'countered'}:x).concat([{f:'m',kind:'counter',amount:amt,listingRef:src.listingRef,status:'pending',t:'Now'}])}));
+      if(typeof th.id==='string'&&meId){
+        await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'counter',payload:{amount:amt}});
+      }else{pingTyping();}
+    };
+    const sendMeetup=async(info)=>{
+      setMeetupOpen(false);
+      if(!info)return;
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:`📍 Meet-up: ${info.place}`,time:'Now',cv:[...t.cv,{f:'m',kind:'meetup',place:info.place,when:info.when,time:info.time,t:'Now'}]}));
+      if(typeof th.id==='string'&&meId){
+        await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'meetup',payload:info});
+      }else{pingTyping();}
     };
     const acceptOffer=async(m)=>{
       haptic('medium');
@@ -880,27 +1198,48 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       }
       setPaySheet(false);
     };
-    const showSendPay=th.dealStatus==='accepted'&&!th.cv.some(c=>c.kind==='payment');
+    const hasMeetup=th.cv.some(c=>c.kind==='meetup');
+    const dealDone=th.cv.some(c=>c.kind==='payment');
+    // Payment only unlocks once a meet-up has actually been agreed on
+    const showSendPay=th.dealStatus==='accepted'&&hasMeetup&&!dealDone;
+    const showMeetup=th.dealStatus==='accepted'&&!hasMeetup&&!dealDone;
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
     return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
       paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu}),
-      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:18,lineHeight:1}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},style:{background:'transparent',border:'none',cursor:'pointer',fontSize:18,color:C.mt,padding:'4px 8px'}},'⋯')]),
+      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:18,lineHeight:1}},'←'),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e('span',{style:{fontSize:10,color:C.lm}},'✓')]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},style:{background:'transparent',border:'none',cursor:'pointer',fontSize:18,color:C.mt,padding:'4px 8px'}},'⋯')]),
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🛡️ Safe meet-up tips'),
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('User reported. Thanks for keeping DINK safe.');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8}},'🚩 Report user'),
+        dealDone&&e('button',{onClick:()=>{setShowConvMenu(false);setDisputeOpen(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.am,borderRadius:8}},'⚖️ Open a dispute'),
         e('button',{onClick:()=>{setShowConvMenu(false);setConfirmBlock(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8}},'⛔ Block user'),
       ]),
       confirmBlock&&e(ConfirmModal,{key:'cbl',title:'Block this user?',body:"They won't be able to message you or see your listings. You can unblock from Settings → Privacy.",confirmLabel:'Block',cancelLabel:'Cancel',danger:true,onCancel:()=>setConfirmBlock(false),onConfirm:()=>{setConfirmBlock(false);showToast&&showToast('User blocked');setActiveIdx(null);}}),
       showSafety&&e(SafetyTipsModal,{key:'safety',onClose:()=>setShowSafety(false)}),
+      counterFor&&e(CounterOfferModal,{key:'co',m:counterFor,onClose:()=>setCounterFor(null),onSubmit:sendCounter}),
+      meetupOpen&&e(MeetupModal,{key:'mu',seller:th.wu,onClose:()=>setMeetupOpen(false),onConfirm:sendMeetup}),
+      disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref,amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:(reason,detail)=>{setDisputeOpen(false);showToast&&showToast('Dispute filed — our team will follow up within 24h');}}),
       e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e('span',{style:{fontSize:15}},'🔥'):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} ⇄ trade`:th.ref.m)]),th.dealStatus==='accepted'&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'✓ ACCEPTED')]),
-      e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer})),e('div',{key:'end',ref:endR})]),
+      e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[
+        ...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer,onDecline:declineOffer,onCounter:setCounterFor})),
+        theyTyping&&e('div',{key:'typ',style:{display:'flex',justifyContent:'flex-start'}},[e('div',{style:{padding:'8px 13px',borderRadius:13,borderBottomLeftRadius:2,background:C.cd,display:'flex',gap:3,alignItems:'center'}},[
+          e('span',{key:'d1',style:{width:5,height:5,borderRadius:'50%',background:C.mt,opacity:.9}}),
+          e('span',{key:'d2',style:{width:5,height:5,borderRadius:'50%',background:C.mt,opacity:.6}}),
+          e('span',{key:'d3',style:{width:5,height:5,borderRadius:'50%',background:C.mt,opacity:.35}}),
+        ])]),
+        e('div',{key:'end',ref:endR}),
+      ]),
       th.dealStatus==='accepted'&&th.cv.some(c=>c.kind==='payment')&&e('div',{key:'cmpl',style:{padding:'8px 12px',background:C.ok+'10',borderTop:`1px solid ${C.ok}30`}},[
         e('button',{onClick:()=>{onOpenReview&&onOpenReview(th.ref,th.wu);},style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.ok,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff'}},'✓ Mark deal complete & leave review'),
       ]),
+      showMeetup&&e('div',{key:'meet',style:{padding:'8px 12px',background:C.tl+'10',borderTop:`1px solid ${C.tl}30`}},[
+        e('div',{style:{fontSize:9,color:C.mt,marginBottom:6,textAlign:'center'}},'Agree on a meet-up before sending payment'),
+        e('button',{onClick:()=>setMeetupOpen(true),style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.tl,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'📍 Propose a meet-up'),
+      ]),
       showSendPay&&e('div',{key:'pay',style:{padding:'8px 12px',background:C.lm+'10',borderTop:`1px solid ${C.lm}30`}},[e('button',{onClick:()=>setPaySheet(true),style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},`💸 Send Payment · $${lastAccept?.amount||0}`)]),
-      !showSendPay&&e('div',{key:'qr',style:{padding:'5px 12px',display:'flex',gap:5,overflowX:'auto'}},QR.map(q=>e('button',{key:q,onClick:()=>send(q),style:{padding:'5px 10px',borderRadius:13,border:`1px solid ${C.bd}`,background:C.cd,color:C.mt,fontSize:10,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}},q))),
+      !showSendPay&&!showMeetup&&e('div',{key:'qr',style:{padding:'5px 12px',display:'flex',gap:5,overflowX:'auto'}},QR.map(q=>e('button',{key:q,onClick:()=>send(q),style:{padding:'5px 10px',borderRadius:13,border:`1px solid ${C.bd}`,background:C.cd,color:C.mt,fontSize:10,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}},q))),
       e('div',{key:'in',style:{padding:'8px 12px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7,alignItems:'center'}},[
-        e('button',{key:'att',onClick:()=>showToast&&showToast('Photo sharing coming soon'),style:{width:32,height:32,borderRadius:'50%',background:'transparent',border:'none',cursor:'pointer',fontSize:16,color:C.mt}},'📎'),
+        e('button',{key:'att',onClick:()=>imgRef.current&&imgRef.current.click(),style:{width:32,height:32,borderRadius:'50%',background:'transparent',border:'none',cursor:'pointer',fontSize:16,color:C.mt}},'📷'),
+        e('input',{key:'file',ref:imgRef,type:'file',accept:'image/*',onChange:onPickImage,style:{display:'none'}}),
         e('input',{key:'ip',value:reply,onChange:ev=>setReply(ev.target.value),onKeyDown:ev=>ev.key==='Enter'&&send(),placeholder:'Message...',style:{flex:1,padding:'7px 12px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:18,color:C.tx,fontSize:12,outline:'none'}}),
         e('button',{key:'sb',onClick:()=>send(),style:{width:36,height:36,borderRadius:'50%',background:C.lm,border:'none',cursor:'pointer',fontSize:14,fontWeight:900,color:'#fff'}},'↑'),
       ]),
@@ -947,7 +1286,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio}){
+function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
@@ -958,6 +1297,61 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
   const [confirmingSold,setConfirmingSold]=useState(null);
   const [editingBio,setEditingBio]=useState(false);
   const [editingWishBudget,setEditingWishBudget]=useState(null);
+  const [avatarUrl,setAvatarUrl]=useState(()=>kv.get('avatar',null));
+  const [avatarBusy,setAvatarBusy]=useState(false);
+  const avRef=useRef(null);
+  const [analyticsFor,setAnalyticsFor]=useState(null);
+  const [bulkMode,setBulkMode]=useState(false);
+  const [bulkSel,setBulkSel]=useState([]);
+  const [bulkPriceOpen,setBulkPriceOpen]=useState(false);
+  const [localOverrides,setLocalOverrides]=useState(()=>kv.get('myListingOverrides',{}));
+  const [commSub,setCommSub]=useState('network');
+
+  const patchLocal=(id,patch)=>setLocalOverrides(o=>{const n={...o,[id]:{...(o[id]||{}),...patch}};kv.set('myListingOverrides',n);return n;});
+
+  // Avatar upload — compress client-side, preview instantly, push to storage for real accounts
+  const pickAvatar=()=>{avRef.current&&avRef.current.click();};
+  const onAvatarFile=async(ev)=>{
+    const f=ev.target.files&&ev.target.files[0];
+    if(ev.target)ev.target.value='';
+    if(!f)return;
+    if(!/^image\//.test(f.type)){showToast&&showToast('Please choose an image file');return;}
+    setAvatarBusy(true);
+    try{
+      const blob=await compressImage(f,512,.85);
+      const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
+      setAvatarUrl(dataUrl);kv.set('avatar',dataUrl);
+      showToast&&showToast('Profile photo updated');
+      if(me&&typeof me.id==='string'){
+        const path=`${me.id}/avatar-${Date.now()}.jpg`;
+        const {error:upErr}=await sb.storage.from('listing-photos').upload(path,blob,{contentType:'image/jpeg',upsert:true});
+        if(!upErr){
+          const {data:pub}=sb.storage.from('listing-photos').getPublicUrl(path);
+          if(pub&&pub.publicUrl){await sb.from('profiles').update({avatar_url:pub.publicUrl}).eq('id',me.id);}
+        }
+      }
+    }catch(err){showToast&&showToast('Could not process that image');}
+    setAvatarBusy(false);
+  };
+
+  const toggleBulk=(id)=>setBulkSel(sel=>sel.includes(id)?sel.filter(x=>x!==id):[...sel,id]);
+  const bulkApplyPrice=(pct)=>{
+    bulkSel.forEach(id=>{
+      const L=MY_LS.find(x=>x.id===id);if(!L)return;
+      const base=(localOverrides[id]&&localOverrides[id].price)||L.price;
+      patchLocal(id,{price:Math.max(1,Math.round(base*(1+pct/100)))});
+    });
+    showToast&&showToast(`Updated ${bulkSel.length} listing${bulkSel.length===1?'':'s'}`);
+    setBulkPriceOpen(false);setBulkSel([]);setBulkMode(false);
+  };
+  const bulkPause=()=>{bulkSel.forEach(id=>patchLocal(id,{paused:!(localOverrides[id]&&localOverrides[id].paused)}));showToast&&showToast(`${bulkSel.length} listing${bulkSel.length===1?'':'s'} paused/resumed`);setBulkSel([]);setBulkMode(false);};
+  const bulkSold=async()=>{const ids=[...bulkSel];setBulkSel([]);setBulkMode(false);for(const id of ids){const L=MY_LS.find(x=>x.id===id);if(L&&onMarkSold)await onMarkSold(L);patchLocal(id,{sold:true});}showToast&&showToast(`${ids.length} marked sold`);};
+  const bumpListing=(L)=>{
+    const key='bump:'+L.id;const last=kv.get(key,0);const now=Date.now();
+    if(now-last<1000*60*60*24){showToast&&showToast('You can bump this again in 24 hours');return;}
+    kv.set(key,now);patchLocal(L.id,{bumped:now,ago:'Just now'});
+    showToast&&showToast('⬆️ Bumped to the top of the feed');
+  };
 
   // Fetch gear + wishlist from DB when me is loaded
   useEffect(()=>{
@@ -1010,10 +1404,11 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
   };
 
   const MY_LS=[
-    {id:9,cat:'paddle',brand:'Head',model:'Radical Elite',price:60,orig:100,cond:7,sid:0,type:'sale',dist:0,saves:3,views:28,ago:'1w',loc:'Maryville',desc:'Great starter/backup.',grip:'4 1/4"',active:true},
-    {id:10,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'both',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
+    {id:901,cat:'paddle',brand:'Head',model:'Radical Elite',price:60,orig:100,cond:7,sid:0,type:'sale',dist:0,saves:3,views:28,ago:'1w',loc:'Maryville',desc:'Great starter/backup.',grip:'4 1/4"',active:true},
+    {id:902,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'both',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
   ];
-  MY_LS.forEach(l=>{const d=pdbGet(l.brand,l.model);if(d)Object.assign(l,d);});
+  MY_LS.forEach(l=>{const d=pdbGet(l.brand,l.model);if(d)Object.assign(l,d);const ov=localOverrides[l.id];if(ov)Object.assign(l,ov);if(ov&&ov.sold)l.active=false;});
+  MY_LS.sort((a,b)=>((b.bumped||0)-(a.bumped||0)));
   const tradeReady=gear.filter(g=>g.w.includes('trade')).length>0&&wish.length>0;
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
@@ -1035,7 +1430,11 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       ]),
       // Instagram-style: avatar + stats in one row
       e('div',{key:'igrow',style:{display:'flex',alignItems:'center',gap:18,marginBottom:12}},[
-        e(Av,{u:M,sz:76,edit:true}),
+        e('div',{style:{position:'relative'}},[
+          e(Av,{u:{...M,avatar:avatarUrl||M.avatar},sz:76,edit:true,onEdit:pickAvatar}),
+          avatarBusy&&e('div',{style:{position:'absolute',inset:0,borderRadius:'50%',background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'#fff',fontWeight:800}},'…'),
+          e('input',{ref:avRef,type:'file',accept:'image/*',onChange:onAvatarFile,style:{display:'none'}}),
+        ]),
         e('div',{style:{flex:1}},[
           e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:10}},[
             e('span',{style:{fontSize:17,fontWeight:900,color:C.tx}},M.name),
@@ -1072,6 +1471,19 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       e('div',{key:'bio',style:{background:C.dm,borderRadius:10,padding:'9px 11px',marginBottom:10,display:'flex',alignItems:'flex-start',gap:8}},[
         e('div',{style:{fontSize:11,color:M.bio?C.tx:C.mt,lineHeight:1.55,flex:1,fontStyle:M.bio?'normal':'italic',cursor:'pointer'},onClick:()=>setEditingBio(true)},M.bio||'Add a short bio so other players know who you are…'),
         e('button',{onClick:()=>setEditingBio(true),style:{background:'transparent',border:'none',color:C.lm,fontSize:11,cursor:'pointer',flexShrink:0,padding:0,marginTop:1,fontWeight:700}},'✎'),
+      ]),
+      // Verification nudge / badge
+      !verified&&e('div',{key:'vf',onClick:onOpenVerify,style:{background:C.tl+'10',borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.tl}35`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
+        e('div',{style:{fontSize:18}},'🛡️'),
+        e('div',{style:{flex:1}},[
+          e('div',{style:{fontSize:12,fontWeight:800,color:C.tl}},'Get verified'),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Confirm your phone — verified sellers get 2× more replies'),
+        ]),
+        e('span',{style:{fontSize:16,color:C.tl}},'›'),
+      ]),
+      verified&&e('div',{key:'vfd',style:{background:C.ok+'10',borderRadius:11,padding:'8px 12px',marginBottom:10,border:`1px solid ${C.ok}35`,display:'flex',alignItems:'center',gap:8}},[
+        e('span',{style:{fontSize:14}},'✅'),
+        e('span',{style:{fontSize:11,fontWeight:800,color:C.ok}},'Verified seller — phone confirmed'),
       ]),
       // Trade matches (only when ready)
       tradeReady&&e('div',{key:'tm',onClick:onOpenMatches,style:{background:`linear-gradient(135deg,${C.lm}12,${C.tl}08)`,borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.lm}25`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
@@ -1129,7 +1541,25 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       tab==='listings'&&e('div',null,[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},[
           e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5}},'ACTIVE LISTINGS'),
-          MY_LS.filter(l=>l.active).length>0&&e('button',{onClick:onCreate,style:{background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'+ New listing'),
+          e('div',{style:{display:'flex',gap:10,alignItems:'center'}},[
+            MY_LS.filter(l=>l.active).length>0&&e('button',{key:'bulk',onClick:()=>{setBulkMode(v=>!v);setBulkSel([]);},style:{background:'transparent',border:'none',color:bulkMode?C.rd:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',padding:0}},bulkMode?'Cancel':'Select'),
+            MY_LS.filter(l=>l.active).length>0&&e('button',{key:'new',onClick:onCreate,style:{background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',padding:0}},'+ New listing'),
+          ]),
+        ]),
+        bulkMode&&e('div',{style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,padding:'9px 11px',marginBottom:9}},[
+          e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:bulkSel.length?8:0}},[
+            e('span',{style:{fontSize:11,fontWeight:800,color:C.tx}},`${bulkSel.length} selected`),
+            e('button',{onClick:()=>setBulkSel(bulkSel.length===MY_LS.filter(l=>l.active).length?[]:MY_LS.filter(l=>l.active).map(l=>l.id)),style:{background:'transparent',border:'none',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',padding:0}},bulkSel.length===MY_LS.filter(l=>l.active).length?'Clear all':'Select all'),
+          ]),
+          bulkSel.length>0&&e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[
+            e('button',{key:'p',onClick:()=>setBulkPriceOpen(v=>!v),style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'💲 Price'),
+            e('button',{key:'z',onClick:bulkPause,style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.am}40`,background:C.am+'10',color:C.am,fontSize:10,fontWeight:700,cursor:'pointer'}},'⏸ Pause'),
+            e('button',{key:'s',onClick:bulkSold,style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.ok}40`,background:C.ok+'10',color:C.ok,fontSize:10,fontWeight:700,cursor:'pointer'}},'✓ Sold'),
+          ]),
+          bulkPriceOpen&&bulkSel.length>0&&e('div',{style:{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.dm}`}},[
+            e('div',{style:{fontSize:9,color:C.mt,marginBottom:6,fontWeight:700}},'ADJUST PRICE ON SELECTED'),
+            e('div',{style:{display:'flex',gap:5}},[-20,-10,-5,5,10].map(pc=>e('button',{key:pc,onClick:()=>bulkApplyPrice(pc),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${pc<0?C.lm:C.bd}`,background:'transparent',color:pc<0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer'}},`${pc>0?'+':''}${pc}%`))),
+          ]),
         ]),
         MY_LS.filter(l=>l.active).length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.bd}`,marginBottom:10}},[
           e('div',{style:{fontSize:32,marginBottom:8,opacity:.5}},'📦'),
@@ -1137,10 +1567,24 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
           e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto 10px',lineHeight:1.5}},'List your unused paddles to earn money or trade for new ones.'),
           e('button',{onClick:onCreate,style:{padding:'8px 16px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'+ Post a Listing'),
         ]),
-        MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.lm}40`,padding:9,marginBottom:8}},[
-          e('div',{onClick:()=>onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[e(PSv,{col:C.lm+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})])]),
+        MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${bulkSel.includes(l.id)?C.lm:C.lm+'40'}`,padding:9,marginBottom:8,opacity:l.paused?.6:1}},[
+          e('div',{onClick:()=>bulkMode?toggleBulk(l.id):onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[
+            bulkMode&&e('div',{key:'cb',style:{width:20,height:20,borderRadius:6,border:`2px solid ${bulkSel.includes(l.id)?C.lm:C.bd}`,background:bulkSel.includes(l.id)?C.lm:'transparent',color:'#fff',fontSize:11,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},bulkSel.includes(l.id)?'✓':''),
+            e(PSv,{key:'p',col:C.lm+'55',sz:28}),
+            e('div',{key:'i',style:{flex:1}},[
+              e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),l.paused&&e('span',{style:{fontSize:8,fontWeight:800,color:C.am,background:C.am+'18',borderRadius:5,padding:'1px 5px'}},'PAUSED'),l.bumped&&e('span',{style:{fontSize:8,fontWeight:800,color:C.lm,background:C.lm+'18',borderRadius:5,padding:'1px 5px'}},'⬆ BUMPED')]),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`),
+            ]),
+            e('div',{key:'pr',style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})]),
+          ]),
           l.views>30&&l.saves===0&&e('div',{style:{fontSize:9,color:C.am,background:C.am+'15',padding:'5px 8px',borderRadius:7,marginBottom:6,lineHeight:1.4}},'💡 High views but no saves — try lowering the price to attract offers'),
-          e('div',{style:{display:'flex',gap:5}},[
+          !bulkMode&&e('div',{style:{display:'flex',gap:5,marginBottom:5}},[
+            e('button',{key:'an',onClick:()=>setAnalyticsFor(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.pu}40`,background:C.pu+'10',color:C.pu,fontSize:10,fontWeight:700,cursor:'pointer'}},'📊 Insights'),
+            e('button',{key:'bp',onClick:()=>bumpListing(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'⬆ Bump'),
+            e('button',{key:'pz',onClick:()=>{patchLocal(l.id,{paused:!l.paused});showToast&&showToast(l.paused?'Listing resumed':'Listing paused');},style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.am}40`,background:'transparent',color:C.am,fontSize:10,fontWeight:700,cursor:'pointer'}},l.paused?'▶ Resume':'⏸ Pause'),
+          ]),
+          !bulkMode&&e('div',{style:{display:'flex',gap:5}},[
             e('button',{onClick:()=>setEditingListing(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer'}},'✎ Edit'),
             e('button',{onClick:()=>setConfirmingSold(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.ok}40`,background:C.ok+'10',color:C.ok,fontSize:10,fontWeight:700,cursor:'pointer'}},'✓ Mark Sold'),
             e('button',{onClick:()=>setConfirmingDel(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer'}},'🗑 Delete'),
@@ -1152,7 +1596,12 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
           e('button',{onClick:()=>{onRelist&&onRelist(l);},style:{width:'100%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer'}},'↻ Relist'),
         ])),
       ]),
-      tab==='community'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
+      tab==='community'&&e('div',{key:'cmw'},[
+        e('div',{key:'sub',style:{display:'flex',gap:6,marginBottom:11,overflowX:'auto'}},[['network','Network'],['leaderboard','🏆 Top Sellers'],['players','🏓 Players Nearby']].map(([id,lbl])=>e('button',{key:id,onClick:()=>setCommSub(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${commSub===id?C.lm:C.bd}`,background:commSub===id?C.lm+'15':'transparent',color:commSub===id?C.lm:C.mt,fontSize:11,fontWeight:commSub===id?800:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}},lbl))),
+        commSub==='network'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
+        commSub==='leaderboard'&&e(Leaderboard,{key:'lb',onOpenSeller,meId:me?.id}),
+        commSub==='players'&&e(PlayersNearby,{key:'pn',me:M,onOpenSeller}),
+      ]),
     ]),
     // --- Modals owned by ProfileTab ---
     editingListing&&e(EditListingModal,{key:'el',L:editingListing,onClose:()=>setEditingListing(null),onSave:async(patch)=>{if(onEditListing)await onEditListing(editingListing,patch);},showToast,showError:showToast}),
@@ -1160,6 +1609,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
     confirmingSold&&e(ConfirmModal,{key:'cms',title:'Mark as sold?',body:'Buyers will no longer see this listing in feeds or search.',confirmLabel:'Mark Sold',cancelLabel:'Cancel',onCancel:()=>setConfirmingSold(null),onConfirm:async()=>{const t=confirmingSold;setConfirmingSold(null);if(onMarkSold)await onMarkSold(t);showToast&&showToast('Listing marked as sold');}}),
     editingBio&&e(BioEditModal,{key:'eb',initial:M.bio||'',onClose:()=>setEditingBio(false),onSave:async(bio)=>{if(onUpdateBio)await onUpdateBio(bio);},showToast}),
     editingWishBudget&&e(WishlistBudgetEditModal,{key:'ewb',wish:editingWishBudget,onClose:()=>setEditingWishBudget(null),onSave:setWishBudget,showToast}),
+    analyticsFor&&e(ListingAnalyticsModal,{key:'an',L:analyticsFor,onClose:()=>setAnalyticsFor(null)}),
   ]),
   ]);
 }
@@ -1214,17 +1664,22 @@ function ActivityFeed({items,onView,emptyMsg}){
   ])));}
 
 function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}){
-  const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',willTrade:false,negotiable:true}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true});
+  const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',willTrade:false,negotiable:true,saleType:'fixed',auctionDays:3}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true,saleType:'fixed',auctionDays:3});
   const [busy,setBusy]=useState(false);
   const [photos,setPhotos]=useState([]); // [{file, preview}]
   const fileRef=useRef(null);
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
   const pickPhoto=()=>fileRef.current&&fileRef.current.click();
-  const onFile=(ev)=>{
-    const files=Array.from(ev.target.files||[]).slice(0,4-photos.length);
-    const next=files.map(file=>({file,preview:URL.createObjectURL(file)}));
-    setPhotos(ps=>[...ps,...next]);
+  const onFile=async(ev)=>{
+    const files=Array.from(ev.target.files||[]).slice(0,6-photos.length);
     ev.target.value='';
+    // Shrink before upload so large phone photos don't stall the post
+    const next=await Promise.all(files.map(async(file)=>{
+      let out=file;
+      try{out=await compressImage(file,1280,.82);}catch(err){}
+      return{file:out,preview:URL.createObjectURL(out)};
+    }));
+    setPhotos(ps=>[...ps,...next].slice(0,6));
   };
   const removePhoto=(idx)=>setPhotos(ps=>{URL.revokeObjectURL(ps[idx].preview);return ps.filter((_,i)=>i!==idx);});
   const CATS2=[{k:'paddle',l:'Paddle',ic:'🏓'},{k:'shoes',l:'Shoes',ic:'👟'},{k:'bag',l:'Bag',ic:'🎒'},{k:'apparel',l:'Apparel',ic:'👕'},{k:'accessories',l:'Accessory',ic:'⚡'}];
@@ -1251,11 +1706,11 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
       e('div',null,[e('label',{style:LS},'CATEGORY'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},CATS2.map(cc=>e('button',{key:cc.k,onClick:()=>up('cat',cc.k),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.cat===cc.k?C.lm:C.bd}`,background:f.cat===cc.k?C.lm+'20':C.cd,color:f.cat===cc.k?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13}},cc.ic),cc.l])))]),
       e('div',null,[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
-          e('label',{style:{...LS,marginBottom:0}},`PHOTOS · ${photos.length}/4 ${photos.length===0?'(required)':''}`),
+          e('label',{style:{...LS,marginBottom:0}},`PHOTOS · ${photos.length}/6 ${photos.length===0?'(required)':''}`),
           photos.length===0&&e('span',{style:{fontSize:9,color:C.mt}},'📸 Natural light, full paddle in frame'),
         ]),
         e('input',{type:'file',accept:'image/*',multiple:true,ref:fileRef,onChange:onFile,style:{display:'none'}}),
-        e('div',{style:{display:'flex',gap:7,overflowX:'auto'}},[0,1,2,3].map(i=>{
+        e('div',{style:{display:'flex',gap:7,overflowX:'auto'}},[0,1,2,3,4,5].map(i=>{
           const p=photos[i];
           if(p)return e('div',{key:i,style:{position:'relative',width:72,height:72,flexShrink:0,borderRadius:10,overflow:'hidden',border:`2px solid ${C.lm}40`}},[
             e('img',{src:p.preview,style:{width:'100%',height:'100%',objectFit:'cover'}}),
@@ -1272,8 +1727,13 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
       e('div',null,[e('label',{style:LS},'BRAND'),e('select',{value:f.brand,onChange:ev=>up('brand',ev.target.value),style:IS},[e('option',{value:''},'Select brand...'),...BRANDS.map(b=>e('option',{key:b,value:b},b))])]),
       e('div',null,[e('label',{style:LS},f.cat==='paddle'?'PADDLE MODEL':'MODEL / NAME'),e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:'Item name...',style:IS})]),
       pdata&&e('div',{style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5}},'✓ FOUND IN PADDLE DATABASE'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[['Core',pdata.core],['Face',pdata.face],['Shape',pdata.shape],['Thick',pdata.thk],['Weight',pdata.wt]].map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`)))]),
-      e('div',null,[e('label',{style:LS},'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:f.price,onChange:ev=>up('price',ev.target.value),type:'number',placeholder:'0',style:{...IS,paddingLeft:24}})])]),
-      f.price&&e('div',{style:{display:'flex',gap:6}},[
+      e('div',null,[e('label',{style:LS},'LISTING TYPE'),e('div',{style:{display:'flex',gap:6}},[
+        e('button',{key:'fx',onClick:()=>up('saleType','fixed'),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${f.saleType!=='auction'?C.lm:C.bd}`,background:f.saleType!=='auction'?C.lm+'15':'transparent',color:f.saleType!=='auction'?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'🏷️ Fixed price'),
+        e('button',{key:'au',onClick:()=>up('saleType','auction'),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${f.saleType==='auction'?C.am:C.bd}`,background:f.saleType==='auction'?C.am+'15':'transparent',color:f.saleType==='auction'?C.am:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'🔨 Auction'),
+      ])]),
+      e('div',null,[e('label',{style:LS},f.saleType==='auction'?'STARTING BID':'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:f.saleType==='auction'?C.am:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:f.price,onChange:ev=>up('price',ev.target.value),type:'number',placeholder:'0',style:{...IS,paddingLeft:24}})])]),
+      f.saleType==='auction'&&e('div',null,[e('label',{style:LS},'AUCTION ENDS IN'),e('div',{style:{display:'flex',gap:6}},[1,3,7].map(d=>e('button',{key:d,onClick:()=>up('auctionDays',d),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${f.auctionDays===d?C.am:C.bd}`,background:f.auctionDays===d?C.am+'15':'transparent',color:f.auctionDays===d?C.am:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},`${d} day${d===1?'':'s'}`)))]),
+      f.price&&f.saleType!=='auction'&&e('div',{style:{display:'flex',gap:6}},[
         e('button',{onClick:()=>up('negotiable',true),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${f.negotiable?C.lm:C.bd}`,background:f.negotiable?C.lm+'15':'transparent',color:f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'💬 Negotiable'),
         e('button',{onClick:()=>up('negotiable',false),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${!f.negotiable?C.lm:C.bd}`,background:!f.negotiable?C.lm+'15':'transparent',color:!f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},'🔒 Firm price'),
       ]),
@@ -1638,6 +2098,329 @@ function ListingSkeleton(){
   return e('div',{style:{display:'flex',flexDirection:'column',gap:9,padding:'0 14px'}},[0,1,2,3].map(i=>e('div',{key:i},[Row()])));
 }
 
+// =====================================================================
+// ============ NEW FEATURE COMPONENTS (appended block) ================
+// =====================================================================
+
+// --- Star rating row (read-only) ---
+function Stars({r,sz=12}){
+  const full=Math.floor(r),half=r-full>=0.5;
+  return e('span',{style:{color:C.am,fontSize:sz,letterSpacing:1}},
+    [0,1,2,3,4].map(i=>e('span',{key:i,style:{color:i<full?C.am:(i===full&&half?C.am:C.bd)}},i<full?'★':(i===full&&half?'⯨':'★'))));
+}
+
+// --- Search bar with autocomplete + history (used by Feed & Market) ---
+function SmartSearch({value,onChange,onSubmit,placeholder,onSaveSearch}){
+  const [focus,setFocus]=useState(false);
+  const [hist,setHist]=useState(()=>searchHistGet());
+  const sugg=value&&value.length>=1?searchSuggest(value,6):[];
+  const showPanel=focus&&(sugg.length>0||(!value&&hist.length>0));
+  const pick=(t)=>{onChange(t);searchHistPush(t);setHist(searchHistGet());onSubmit&&onSubmit(t);setFocus(false);};
+  const submit=()=>{if(value&&value.trim()){searchHistPush(value);setHist(searchHistGet());}onSubmit&&onSubmit(value);setFocus(false);};
+  return e('div',{style:{position:'relative'}},[
+    e('div',{key:'r',style:{position:'relative'}},[
+      e('span',{style:{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:11,zIndex:1}},'🔍'),
+      e('input',{value,onChange:ev=>onChange(ev.target.value),onFocus:()=>setFocus(true),onBlur:()=>setTimeout(()=>setFocus(false),180),onKeyDown:ev=>{if(ev.key==='Enter')submit();},placeholder:placeholder||'Search…',style:{width:'100%',padding:'9px 64px 9px 31px',background:C.cd,border:`1px solid ${focus?C.lm:C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}}),
+      value&&e('button',{key:'sv',onMouseDown:ev=>{ev.preventDefault();onSaveSearch&&onSaveSearch(value);},title:'Save this search',style:{position:'absolute',right:32,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.lm,padding:0}},'🔖'),
+      value&&e('button',{key:'cl',onMouseDown:ev=>{ev.preventDefault();onChange('');},style:{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.mt,padding:0}},'✕'),
+    ]),
+    showPanel&&e('div',{key:'p',style:{position:'absolute',top:'calc(100% + 4px)',left:0,right:0,background:C.sf,border:`1px solid ${C.bd}`,borderRadius:11,boxShadow:'0 8px 24px rgba(0,0,0,0.14)',zIndex:30,overflow:'hidden',maxHeight:240,overflowY:'auto'}},[
+      !value&&hist.length>0&&e('div',{key:'hh',style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 12px 4px'}},[e('span',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.5}},'RECENT'),e('button',{onMouseDown:ev=>{ev.preventDefault();searchHistClear();setHist([]);},style:{background:'transparent',border:'none',color:C.lm,fontSize:9,cursor:'pointer',fontWeight:700}},'Clear')]),
+      !value&&hist.map(h=>e('button',{key:h,onMouseDown:ev=>{ev.preventDefault();pick(h);},style:{display:'flex',alignItems:'center',gap:8,width:'100%',textAlign:'left',padding:'8px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx}},[e('span',{style:{fontSize:11,opacity:.6}},'🕘'),h])),
+      sugg.map(s=>e('button',{key:s,onMouseDown:ev=>{ev.preventDefault();pick(s);},style:{display:'flex',alignItems:'center',gap:8,width:'100%',textAlign:'left',padding:'8px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderTop:`1px solid ${C.dm}`}},[e('span',{style:{fontSize:11,opacity:.6}},'🔍'),e('span',{dangerouslySetInnerHTML:{__html:s.replace(new RegExp('('+value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<b style="color:'+C.lm+'">$1</b>')}})])),
+    ]),
+  ]);
+}
+
+// --- Price history sparkline chart ---
+function PriceHistoryChart({L}){
+  const pts=priceHistory(L);
+  if(pts.length<2)return null;
+  const W=300,H=70,pad=8;
+  const prices=pts.map(p=>p.price);
+  const lo=Math.min(...prices),hi=Math.max(...prices),span=hi-lo||1;
+  const x=i=>pad+(i/(pts.length-1))*(W-pad*2);
+  const y=p=>H-pad-((p-lo)/span)*(H-pad*2-10);
+  const path=pts.map((p,i)=>`${i===0?'M':'L'}${x(i).toFixed(1)},${y(p.price).toFixed(1)}`).join(' ');
+  const area=`${path} L${x(pts.length-1)},${H-pad} L${x(0)},${H-pad} Z`;
+  const first=pts[0].price,last=pts[pts.length-1].price;
+  const down=last<first;const delta=Math.abs(last-first);
+  return e('div',{style:{background:C.sf,borderRadius:11,padding:11,border:`1px solid ${C.bd}`}},[
+    e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}},[
+      e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3}},'PRICE HISTORY'),
+      delta>0&&e('span',{style:{fontSize:10,fontWeight:800,color:down?C.ok:C.am}},`${down?'▼':'▲'} $${delta} over 6w`),
+    ]),
+    e('svg',{key:'s',viewBox:`0 0 ${W} ${H}`,style:{width:'100%',height:H,display:'block'}},[
+      e('defs',{key:'d'},[e('linearGradient',{id:'phg',x1:0,y1:0,x2:0,y2:1},[e('stop',{offset:'0%',stopColor:(down?C.ok:C.am),stopOpacity:0.28}),e('stop',{offset:'100%',stopColor:(down?C.ok:C.am),stopOpacity:0})])]),
+      e('path',{key:'a',d:area,fill:'url(#phg)'}),
+      e('path',{key:'l',d:path,fill:'none',stroke:down?C.ok:C.am,strokeWidth:2,strokeLinejoin:'round',strokeLinecap:'round'}),
+      ...pts.map((p,i)=>e('circle',{key:'c'+i,cx:x(i),cy:y(p.price),r:i===pts.length-1?3.5:2.5,fill:i===pts.length-1?(down?C.ok:C.am):C.sf,stroke:down?C.ok:C.am,strokeWidth:1.5})),
+      ...pts.map((p,i)=>e('text',{key:'t'+i,x:x(i),y:H-1,fontSize:7,fill:C.mt,textAnchor:'middle'},p.label)),
+    ]),
+  ]);
+}
+
+// --- Reviews list block ---
+function ReviewsBlock({sid,compact}){
+  const rv=reviewsFor(sid);
+  const avg=reviewAvg(sid);
+  const [expanded,setExpanded]=useState(false);
+  if(rv.length===0)return e('div',{style:{fontSize:11,color:C.mt,padding:'8px 0'}},'No reviews yet — be the first after your deal.');
+  const shown=expanded?rv:rv.slice(0,compact?1:2);
+  return e('div',null,[
+    e('div',{key:'h',style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},[
+      e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},avg),
+      e(Stars,{r:avg,sz:13}),
+      e('span',{style:{fontSize:10,color:C.mt}},`${rv.length} review${rv.length===1?'':'s'}`),
+    ]),
+    e('div',{key:'l',style:{display:'flex',flexDirection:'column',gap:7}},shown.map((r,i)=>e('div',{key:i,style:{background:C.cd,borderRadius:10,padding:'9px 11px',border:`1px solid ${C.bd}`}},[
+      e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:3}},[e(Stars,{r:r.r,sz:10}),e('span',{style:{fontSize:9,color:C.mt}},`${r.by} · ${r.ago}`)]),
+      e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.5}},r.t),
+    ]))),
+    rv.length>shown.length&&e('button',{key:'m',onClick:()=>setExpanded(true),style:{marginTop:7,background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',padding:0}},`Show all ${rv.length} reviews ›`),
+  ]);
+}
+
+// --- Full seller profile view (opened from a listing's seller card) ---
+function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showToast}){
+  const listings=LS.filter(l=>l.sid===u.id);
+  const avg=reviewAvg(u.id)||u.rating||0;
+  const shareProfile=()=>{
+    haptic();
+    const url=`${window.location.origin}${window.location.pathname}#seller-${u.id}`;
+    if(navigator.share)navigator.share({title:u.name,text:`${u.name} on DINK Exchange`,url}).catch(()=>{});
+    else{try{navigator.clipboard.writeText(url);showToast&&showToast('Profile link copied');}catch{showToast&&showToast('Share unavailable');}}
+  };
+  return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:26}},[
+    e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[
+      e('button',{onClick:onBack,style:{background:'none',border:'none',color:C.tx,cursor:'pointer',fontSize:20,padding:0}},'←'),
+      e('span',{style:{flex:1,fontSize:13,fontWeight:700,color:C.tx}},'Seller Profile'),
+      e('button',{onClick:shareProfile,style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:8,color:C.tx,padding:'5px 9px',cursor:'pointer',fontSize:12}},'⤴ Share'),
+    ]),
+    e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},[
+      e('div',{key:'top',style:{display:'flex',gap:14,alignItems:'center',marginBottom:14}},[
+        e(Av,{u,sz:64}),
+        e('div',{style:{flex:1}},[
+          e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},u.name),u.vfd&&e('span',{style:{fontSize:12,color:C.lm}},'✓')]),
+          e('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:3}},[e(Stars,{r:avg,sz:12}),e('span',{style:{fontSize:10,color:C.mt}},`${avg} · ${u.sales||0} sales`)]),
+          e('div',{style:{fontSize:10,color:C.mt,marginTop:3}},`📍 ${u.loc||'—'} · ⚡ ${u.resp||'—'} · 🏓 DUPR ${u.skill||'—'}`),
+        ]),
+      ]),
+      u.id!==meId&&e('div',{key:'fb',style:{marginBottom:14}},[e(FollowBtn,{userId:u.id,following:following||[],onToggle:onToggleFollow||(()=>{}),sz:'lg'})]),
+      u.bdg&&u.bdg.length>0&&e('div',{key:'bd',style:{display:'flex',gap:5,flexWrap:'wrap',marginBottom:14}},u.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'15',borderRadius:8,padding:'3px 8px',border:`1px solid ${C.tl}25`}},b))),
+      e('div',{key:'rv',style:{marginBottom:16}},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'REVIEWS'),e(ReviewsBlock,{sid:u.id})]),
+      e('div',{key:'ls'},[
+        e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},`LISTINGS · ${listings.length}`),
+        listings.length===0?e('div',{style:{fontSize:11,color:C.mt}},'No active listings right now.'):
+        e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:9}},listings.map(l=>e(LCard,{key:l.id,L:l,onView:()=>onView&&onView(l),saved:false,onSave:()=>{}}))),
+      ]),
+    ]),
+  ]);
+}
+
+// --- Community leaderboard (top sellers) ---
+function Leaderboard({onOpenSeller,meId}){
+  const [metric,setMetric]=useState('sales');
+  const all=[ME,...US].filter((u,i,arr)=>arr.findIndex(x=>x.id===u.id)===i);
+  const ranked=[...all].sort((a,b)=>{
+    if(metric==='sales')return (b.sales||0)-(a.sales||0);
+    if(metric==='rating')return (reviewAvg(b.id)||b.rating||0)-(reviewAvg(a.id)||a.rating||0);
+    return (b.trust||0)-(a.trust||0);
+  }).slice(0,10);
+  const medal=['🥇','🥈','🥉'];
+  return e('div',null,[
+    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:11}},[['sales','Most Sales'],['rating','Top Rated'],['trust','Most Trusted']].map(([k,l])=>e('button',{key:k,onClick:()=>setMetric(k),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${metric===k?C.am:C.dm}`,background:metric===k?C.am+'15':'transparent',color:metric===k?C.am:C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},l))),
+    e('div',{key:'l',style:{display:'flex',flexDirection:'column',gap:7}},ranked.map((u,i)=>{
+      const val=metric==='sales'?`${u.sales||0} sales`:metric==='rating'?`★ ${reviewAvg(u.id)||u.rating||0}`:`⬡ ${u.trust||0}`;
+      const isMe=u.id===meId||u.id===0;
+      return e('div',{key:u.id,onClick:()=>u.id!==0&&u.id!==meId&&onOpenSeller&&onOpenSeller(u),style:{display:'flex',alignItems:'center',gap:10,padding:'9px 11px',borderRadius:11,background:isMe?C.lm+'10':C.cd,border:`1px solid ${isMe?C.lm+'40':C.bd}`,cursor:(u.id!==0&&u.id!==meId)?'pointer':'default'}},[
+        e('div',{style:{width:26,textAlign:'center',fontSize:i<3?16:12,fontWeight:900,color:i<3?C.am:C.mt}},i<3?medal[i]:i+1),
+        e(Av,{u,sz:34}),
+        e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',alignItems:'center',gap:4}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},isMe?'You':u.name),u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓')]),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`📍 ${u.loc||'—'}`)]),
+        e('span',{style:{fontSize:12,fontWeight:800,color:i<3?C.am:C.tx}},val),
+      ]);
+    })),
+  ]);
+}
+
+// --- "Players Near You" — similar DUPR skill, sorted by distance ---
+function PlayersNearby({me,onOpenSeller}){
+  const mySkill=parseFloat((me&&me.skill)||ME.skill)||3.5;
+  const players=US.map(u=>({u,skillDiff:Math.abs((parseFloat(u.skill)||3.5)-mySkill)}))
+    .filter(p=>p.u.dist!=null&&p.u.dist<=30)
+    .sort((a,b)=>(a.skillDiff-b.skillDiff)||(a.u.dist-b.u.dist))
+    .slice(0,8);
+  if(players.length===0)return e('div',{style:{fontSize:11,color:C.mt,padding:'14px 0',textAlign:'center'}},'No players nearby yet.');
+  return e('div',null,[
+    e('div',{key:'i',style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.4}},`Players within 30mi near your DUPR ${mySkill.toFixed(1)} — connect to rally or trade.`),
+    e('div',{key:'l',style:{display:'flex',flexDirection:'column',gap:7}},players.map(({u,skillDiff})=>e('div',{key:u.id,onClick:()=>onOpenSeller&&onOpenSeller(u),style:{display:'flex',alignItems:'center',gap:10,padding:'9px 11px',borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,cursor:'pointer'}},[
+      e(Av,{u,sz:38}),
+      e('div',{style:{flex:1,minWidth:0}},[
+        e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),u.vfd&&e('span',{style:{fontSize:9,color:C.lm}},'✓'),u.lastActive==='Now'&&e('span',{style:{fontSize:8,color:C.ok,fontWeight:800}},'🟢')]),
+        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`📍 ${u.dist}mi · 🏓 DUPR ${u.skill}`),
+      ]),
+      e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:10,fontWeight:800,color:skillDiff<=0.5?C.ok:C.lm}},skillDiff<=0.5?'Great match':'Good match'),e('div',{style:{fontSize:9,color:C.mt}},`±${skillDiff.toFixed(1)} DUPR`)]),
+    ]))),
+  ]);
+}
+
+// --- Local map: radar-style plot of nearby listings by distance + bearing ---
+function LocalMap({listings,onView}){
+  const W=320,cx=W/2,cy=W/2;
+  const maxD=Math.max(10,...listings.map(l=>l.dist||0));
+  const R=cx-18;
+  const rings=[0.33,0.66,1];
+  const plot=listings.slice(0,18).map(l=>{
+    const ang=(listingBearing(l)*Math.PI)/180;
+    const rad=((l.dist||0)/maxD)*R;
+    return{l,x:cx+Math.cos(ang)*rad,y:cy+Math.sin(ang)*rad};
+  });
+  const [sel,setSel]=useState(null);
+  return e('div',null,[
+    e('div',{key:'m',style:{position:'relative',width:'100%',maxWidth:W,margin:'0 auto'}},[
+      e('svg',{viewBox:`0 0 ${W} ${W}`,style:{width:'100%',height:'auto',display:'block'}},[
+        ...rings.map((r,i)=>e('circle',{key:'r'+i,cx,cy,r:R*r,fill:'none',stroke:C.bd,strokeWidth:1,strokeDasharray:i<2?'3 4':'none'})),
+        ...rings.map((r,i)=>e('text',{key:'rl'+i,x:cx+2,y:cy-R*r+10,fontSize:8,fill:C.mt},`${Math.round(maxD*r)}mi`)),
+        e('line',{key:'lx',x1:cx-R,y1:cy,x2:cx+R,y2:cy,stroke:C.dm,strokeWidth:1}),
+        e('line',{key:'ly',x1:cx,y1:cy-R,x2:cx,y2:cy+R,stroke:C.dm,strokeWidth:1}),
+        e('circle',{key:'me',cx,cy,r:6,fill:C.lm}),
+        e('text',{key:'met',x:cx,y:cy-9,fontSize:8,fill:C.lm,textAnchor:'middle',fontWeight:'bold'},'You'),
+        ...plot.map(({l,x,y})=>e('g',{key:l.id,style:{cursor:'pointer'},onClick:()=>setSel(l)},[
+          e('circle',{cx:x,cy:y,r:sel&&sel.id===l.id?8:6,fill:l.type==='trade'?C.tl:C.am,stroke:C.bg,strokeWidth:2}),
+          e('text',{x,y:y+3,fontSize:8,fill:'#fff',textAnchor:'middle'},'🏓'),
+        ])),
+      ]),
+    ]),
+    sel&&e('div',{key:'sel',onClick:()=>onView&&onView(sel),style:{marginTop:10,background:C.cd,borderRadius:12,border:`1px solid ${C.lm}40`,padding:10,display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[
+      e(PSv,{col:ccol(sel.cond)+'70',sz:30}),
+      e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},sel.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},sel.model),e('div',{style:{fontSize:9,color:C.mt}},`📍 ${sel.dist}mi · ${sel.loc}`)]),
+      sel.type!=='trade'?e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`$${sel.price}`):e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Trade'),
+    ]),
+    !sel&&e('div',{key:'hint',style:{marginTop:9,textAlign:'center',fontSize:10,color:C.mt}},`Tap a 🏓 to preview · ${plot.length} listings plotted`),
+  ]);
+}
+
+// --- Counter-offer modal ---
+function CounterOfferModal({m,onClose,onSubmit}){
+  const base=m.amount||0;const listed=m.listingRef&&m.listingRef.p||base;
+  const [amt,setAmt]=useState(Math.round((base+listed)/2));
+  const safe=safeMoney(amt);
+  const valid=safe!=null&&safe>0;
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:45}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'Counter Offer'),e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕')]),
+      e('div',{key:'ctx',style:{fontSize:11,color:C.mt,marginBottom:12}},`They offered $${base}${listed?` · listed at $${listed}`:''}. Send a counter:`),
+      e('div',{key:'in',style:{position:'relative',marginBottom:12}},[e('span',{style:{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',color:C.am,fontSize:22,fontWeight:900}},'$'),e('input',{type:'number',value:amt,onChange:ev=>setAmt(+ev.target.value||0),style:{width:'100%',padding:'13px 14px 13px 36px',background:C.cd,border:`2px solid ${C.am}40`,borderRadius:13,color:C.am,fontSize:24,fontWeight:900,outline:'none'}})]),
+      e('div',{key:'btns',style:{display:'flex',gap:8}},[
+        e('button',{onClick:onClose,style:{flex:1,padding:'12px 0',borderRadius:11,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.mt}},'Cancel'),
+        e('button',{onClick:()=>valid&&onSubmit(safe),disabled:!valid,style:{flex:2,padding:'12px 0',borderRadius:11,background:valid?C.am:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:13,fontWeight:800,color:'#fff'}},`Send Counter · $${amt}`),
+      ]),
+    ]),
+  ]);
+}
+
+// --- Meeting scheduler (the "meeting confirmed" step between accept & pay) ---
+function MeetupModal({seller,onClose,onConfirm}){
+  const SPOTS=['Maryville Pickleball Courts','Sandy Springs Park','Alcoa Duck Pond','Knoxville Racquet Club','Other (type below)'];
+  const TIMES=['Today','Tomorrow','This weekend','Pick a day'];
+  const [spot,setSpot]=useState(SPOTS[0]);
+  const [custom,setCustom]=useState('');
+  const [when,setWhen]=useState(TIMES[2]);
+  const [time,setTime]=useState('10:00 AM');
+  const place=spot.startsWith('Other')?custom:spot;
+  const valid=place&&place.trim();
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:45}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,maxHeight:'88%',overflowY:'auto',animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'📍 Confirm Meet-up'),e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕')]),
+      e('div',{key:'sub',style:{fontSize:11,color:C.mt,marginBottom:14}},`Lock in a public, daytime spot with ${seller&&seller.name?seller.name.split(' ')[0]:'the seller'}.`),
+      e('div',{key:'pl',style:{marginBottom:12}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'WHERE'),e('div',{style:{display:'flex',flexDirection:'column',gap:6}},SPOTS.map(s=>e('button',{key:s,onClick:()=>setSpot(s),style:{textAlign:'left',padding:'9px 11px',borderRadius:10,border:`1px solid ${spot===s?C.lm:C.bd}`,background:spot===s?C.lm+'15':C.cd,color:spot===s?C.lm:C.tx,fontSize:11,fontWeight:600,cursor:'pointer'}},s)))]),
+      spot.startsWith('Other')&&e('input',{key:'cust',value:custom,onChange:ev=>setCustom(ev.target.value),placeholder:'Enter a public meeting place',style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none',marginBottom:12}}),
+      e('div',{key:'wh',style:{marginBottom:12}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'WHEN'),e('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},TIMES.map(t=>e('button',{key:t,onClick:()=>setWhen(t),style:{padding:'7px 12px',borderRadius:9,border:`1px solid ${when===t?C.lm:C.bd}`,background:when===t?C.lm+'15':C.cd,color:when===t?C.lm:C.mt,fontSize:11,fontWeight:600,cursor:'pointer'}},t)))]),
+      e('div',{key:'tm',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'TIME'),e('input',{value:time,onChange:ev=>setTime(ev.target.value),style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
+      e('div',{key:'sf',style:{fontSize:10,color:C.tl,background:C.tl+'10',borderRadius:9,padding:'8px 11px',marginBottom:14,border:`1px solid ${C.tl}30`}},'🛡️ Public place + daylight keeps both of you safe.'),
+      e('button',{key:'go',onClick:()=>valid&&onConfirm({place,when,time}),disabled:!valid,style:{width:'100%',padding:'13px 0',borderRadius:12,background:valid?C.lm:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:13,fontWeight:800,color:'#fff'}},'Send Meet-up Proposal'),
+    ]),
+  ]);
+}
+
+// --- Listing analytics sheet (seller tool) ---
+function ListingAnalyticsModal({L,onClose}){
+  // Synthesize a 7-day view series deterministically from saved stats
+  const seedStr=`${L.brand}${L.id}`;let seed=0;for(let i=0;i<seedStr.length;i++)seed=(seed*31+seedStr.charCodeAt(i))%9973;
+  const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return (seed%1000)/1000;};
+  const total=L.views||0;
+  const raw=[0,0,0,0,0,0,0].map(()=>rnd()+0.4);
+  const sum=raw.reduce((a,b)=>a+b,0);
+  const series=raw.map(v=>Math.round((v/sum)*total));
+  const days=['M','T','W','T','F','S','S'];
+  const maxV=Math.max(1,...series);
+  const saveRate=total>0?Math.round((L.saves/total)*100):0;
+  const W=300,H=80;
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:45}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'📊 Listing Performance'),e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕')]),
+      e('div',{key:'sub',style:{fontSize:10,color:C.mt,marginBottom:14}},`${L.brand} ${L.model}`),
+      e('div',{key:'stats',style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:16}},[
+        ['👁',total,'Views'],['♥',L.saves||0,'Saves'],['📈',saveRate+'%','Save rate'],
+      ].map(([ic,v,l])=>e('div',{key:l,style:{background:C.cd,borderRadius:11,padding:'11px 8px',textAlign:'center',border:`1px solid ${C.bd}`}},[e('div',{style:{fontSize:15}},ic),e('div',{style:{fontSize:17,fontWeight:900,color:C.lm,marginTop:2}},v),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},l)]))),
+      e('div',{key:'cl',style:{fontSize:9,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'VIEWS · LAST 7 DAYS'),
+      e('svg',{key:'ch',viewBox:`0 0 ${W} ${H}`,style:{width:'100%',height:H,display:'block',marginBottom:10}},
+        series.map((v,i)=>{const bw=W/7*0.55,gap=W/7;const x=i*gap+(gap-bw)/2;const bh=(v/maxV)*(H-20);return e('g',{key:i},[
+          e('rect',{x,y:H-16-bh,width:bw,height:bh,rx:3,fill:i===6?C.lm:C.lm+'70'}),
+          e('text',{x:x+bw/2,y:H-16-bh-3,fontSize:8,fill:C.mt,textAnchor:'middle'},v||''),
+          e('text',{x:x+bw/2,y:H-4,fontSize:8,fill:C.mt,textAnchor:'middle'},days[i]),
+        ]);})),
+      saveRate<5&&total>20&&e('div',{key:'tip',style:{fontSize:10,color:C.am,background:C.am+'12',borderRadius:9,padding:'8px 11px',lineHeight:1.4}},'💡 Lots of views but few saves — try a sharper main photo or a small price drop.'),
+      saveRate>=15&&e('div',{key:'tip2',style:{fontSize:10,color:C.ok,background:C.ok+'12',borderRadius:9,padding:'8px 11px',lineHeight:1.4}},'🔥 Strong interest — buyers are saving this. Expect offers soon.'),
+    ]),
+  ]);
+}
+
+// --- Identity / phone verification flow ---
+function VerificationModal({onClose,onVerified}){
+  const [step,setStep]=useState('phone');
+  const [phone,setPhone]=useState('');
+  const [code,setCode]=useState('');
+  const [busy,setBusy]=useState(false);
+  const sendCode=()=>{if(phone.replace(/\D/g,'').length<10)return;setBusy(true);setTimeout(()=>{setBusy(false);setStep('code');},700);};
+  const verify=()=>{if(code.length<4)return;setBusy(true);setTimeout(()=>{setBusy(false);setStep('done');onVerified&&onVerified();},700);};
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:18,padding:22,width:'100%',maxWidth:330,animation:'slideUp .2s'}},[
+      step==='phone'&&[
+        e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[e('div',{style:{fontSize:34,marginBottom:8}},'📱'),e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Verify your identity'),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},'A verified badge builds buyer trust and unlocks higher-value deals. We\'ll text a code to confirm your number.')]),
+        e('input',{key:'ph',value:phone,onChange:ev=>setPhone(ev.target.value),placeholder:'Phone number',type:'tel',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:14,outline:'none',marginBottom:12}}),
+        e('button',{key:'go',onClick:sendCode,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff',marginBottom:8}},busy?'Sending…':'Send code'),
+        e('button',{key:'cx',onClick:onClose,style:{width:'100%',padding:'9px 0',background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:'pointer'}},'Maybe later'),
+      ],
+      step==='code'&&[
+        e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[e('div',{style:{fontSize:34,marginBottom:8}},'✉️'),e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Enter the code'),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},`We sent a 4-digit code to ${phone}. (Demo: enter any 4 digits.)`)]),
+        e('input',{key:'cd',value:code,onChange:ev=>setCode(ev.target.value.replace(/\D/g,'').slice(0,6)),placeholder:'----',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:22,fontWeight:900,letterSpacing:8,textAlign:'center',outline:'none',marginBottom:12}}),
+        e('button',{key:'go',onClick:verify,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},busy?'Verifying…':'Verify'),
+      ],
+      step==='done'&&[
+        e('div',{key:'i',style:{textAlign:'center'}},[e('div',{style:{fontSize:40,marginBottom:10}},'✅'),e('div',{style:{fontSize:18,fontWeight:900,color:C.ok,marginBottom:6}},"You're verified!"),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,marginBottom:18}},'Your profile now shows a verified badge. Buyers trust verified sellers more.'),e('button',{onClick:onClose,style:{width:'100%',padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Done')]),
+      ],
+    ]),
+  ]);
+}
+
+// --- Dispute / report-a-deal flow ---
+function DisputeModal({deal,onClose,onSubmit}){
+  const REASONS=['Item not as described','Seller/buyer no-show','Payment issue','Felt unsafe','Other'];
+  const [reason,setReason]=useState('');
+  const [detail,setDetail]=useState('');
+  const valid=reason&&detail.trim().length>3;
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end',zIndex:46}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,maxHeight:'85%',overflowY:'auto',animation:'slideUp .25s'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},'🚩 Report an Issue'),e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,fontSize:18,cursor:'pointer'}},'✕')]),
+      e('div',{key:'sub',style:{fontSize:11,color:C.mt,marginBottom:14}},'Our team reviews every report. Sharing details helps us resolve it fast.'),
+      e('div',{key:'rs',style:{marginBottom:12}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'WHAT HAPPENED?'),e('div',{style:{display:'flex',flexDirection:'column',gap:6}},REASONS.map(r=>e('button',{key:r,onClick:()=>setReason(r),style:{textAlign:'left',padding:'9px 11px',borderRadius:10,border:`1px solid ${reason===r?C.rd:C.bd}`,background:reason===r?C.rd+'12':C.cd,color:reason===r?C.rd:C.tx,fontSize:11,fontWeight:600,cursor:'pointer'}},r)))]),
+      e('textarea',{key:'dt',value:detail,onChange:ev=>setDetail(ev.target.value),placeholder:'Describe what happened…',rows:4,style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:12,outline:'none',resize:'none',lineHeight:1.5,marginBottom:14}}),
+      e('button',{key:'go',onClick:()=>valid&&onSubmit({reason,detail}),disabled:!valid,style:{width:'100%',padding:'13px 0',borderRadius:12,background:valid?C.rd:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:13,fontWeight:800,color:'#fff'}},'Submit Report'),
+    ]),
+  ]);
+}
+
 function App(){
   const [authState,setAuthState]=useState('loading');
   const [me,setMe]=useState(null);
@@ -1670,12 +2453,18 @@ function App(){
   const [reviewFor,setReviewFor]=useState(null);
   const [safetyOpen,setSafetyOpen]=useState(false);
   const [condGuideOpen,setCondGuideOpen]=useState(false);
+  const [sellerView,setSellerView]=useState(null);   // public seller profile overlay
+  const [verifyOpen,setVerifyOpen]=useState(false);  // identity/phone verification
+  const [verified,setVerified]=useState(()=>kv.get('verified',false));
+  const [pushOn,setPushOn]=useState(()=>pushPermGet()==='granted');
   const [onboardStep,setOnboardStep]=useState(0);
   const [onboardDismissed,setOnboardDismissed]=useState(false);
   // Theme: light by default, hydrated from kv. Triggers a render via themeTick so closures pick up the new C values.
   const [themeMode,setThemeMode]=useState(()=>kv.get('themeMode','light'));
   const [,setThemeTick]=useState(0);
   useEffect(()=>{applyTheme(themeMode);kv.set('themeMode',themeMode);setThemeTick(t=>t+1);},[themeMode]);
+  // Register the service worker once so push/offline can be layered on in production
+  useEffect(()=>{registerSW();},[]);
   // Recently viewed listing ids (hydrated from kv)
   const [recentlyViewed,setRecentlyViewed]=useState(()=>recentGet());
   const showToast=useCallback((msg)=>setToast(msg),[]);
@@ -1978,7 +2767,8 @@ function App(){
           const i=ms.findIndex(t=>t.id===m.conversation_id);
           if(i<0){fetchConversations();return ms;} // unknown thread — full refetch
           const mapped=mapMessageRow(m,me.id);
-          const lastTxt=m.kind==='text'?(m.body||''):m.kind==='offer'?`Offered $${m.payload?.amount||''}`:m.kind==='buynow'?`Buy Now $${m.payload?.amount||''}`:m.kind==='accept'?`✓ Accepted $${m.payload?.amount||''}`:m.kind==='payment'?`Sent $${m.payload?.amount||''} via ${m.payload?.method||''}`:'[message]';
+          const lastTxt=m.kind==='text'?(m.body||''):m.kind==='offer'?`Offered $${m.payload?.amount||''}`:m.kind==='buynow'?`Buy Now $${m.payload?.amount||''}`:m.kind==='accept'?`✓ Accepted $${m.payload?.amount||''}`:m.kind==='counter'?`Countered $${m.payload?.amount||''}`:m.kind==='payment'?`Sent $${m.payload?.amount||''} via ${m.payload?.method||''}`:'[message]';
+          pushNotify(ms[i]?.n||'New message',lastTxt,{tag:'msg-'+m.conversation_id});
           return ms.map((t,idx)=>idx!==i?t:{
             ...t,cv:[...t.cv,mapped],last:lastTxt,time:'Now',
             unread:idx===activeMsgIdx?0:(t.unread||0)+1,
@@ -2027,12 +2817,14 @@ function App(){
             detail:`Save $${oldP-newP}`,
           },...ns]);
           showToast(`💰 Price drop: ${n.brand} ${n.model} — now $${newP}`);
+          pushNotify('💰 Price drop on a saved listing',`${n.brand} ${n.model} — now $${newP} (was $${oldP})`,{tag:'pd-'+n.id});
         }
       })
       // New notifications for me
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${me.id}`},(payload)=>{
         const n=mapNotif(payload.new);
         setNotifs(ns=>[n,...ns]);
+        pushNotify(n.title||'DINK Exchange',n.msg||'',{tag:'nt-'+(payload.new?.id||Date.now())});
         if(payload.new?.type==='follow')fetchFollows();
       })
       .subscribe();
@@ -2154,6 +2946,11 @@ function App(){
       paddle_spec_id:specId,
       tag:'NEW',
     };
+    // Auction listings carry an end time; bids are tracked separately
+    if(formData.saleType==='auction'){
+      row.is_auction=true;
+      row.auction_ends_at=new Date(Date.now()+1000*60*60*24*(formData.auctionDays||3)).toISOString();
+    }
     const {data:listing,error}=await sb.from('listings').insert(row).select().single();
     if(error){console.error('insert listing',error);return;}
     // Upload photos to storage and insert listing_photos rows
@@ -2161,7 +2958,7 @@ function App(){
       const photoRows=[];
       for(let i=0;i<photoFiles.length;i++){
         const file=photoFiles[i];
-        const ext=(file.name.split('.').pop()||'jpg').toLowerCase();
+        const ext=((file.name||'').split('.').pop()||'jpg').toLowerCase();
         const path=`${me.id}/${listing.id}/${i}.${ext}`;
         const {error:upErr}=await sb.storage.from('listing-photos').upload(path,file,{cacheControl:'3600',upsert:true,contentType:file.type});
         if(upErr){console.error('photo upload',upErr);continue;}
@@ -2316,21 +3113,23 @@ function App(){
         safetyOpen&&e(SafetyTipsModal,{key:'safety',onClose:()=>setSafetyOpen(false)}),
         condGuideOpen&&e(ConditionGuideModal,{key:'cguide',onClose:()=>setCondGuideOpen(false)}),
         buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
-        reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{setReviewFor(null);showToast('Thanks for your review!');}}),
+        reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{try{reviewAdd(reviewFor.seller?.id,r,t,me?.name||'You');}catch(err){}setReviewFor(null);showToast('Thanks for your review!');}}),
+        verifyOpen&&e(VerificationModal,{key:'vf',onClose:()=>setVerifyOpen(false),onVerified:()=>{setVerified(true);kv.set('verified',true);setVerifyOpen(false);showToast('✅ You are now a Verified seller');}}),
+        sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),prefill:crtPrefill}),
         matchOpen&&e(MatchOverlay,{onClose:()=>setMatchOpen(false),onChat:()=>setTab('messages')}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),onTrade:()=>setMatchOpen(true),notifs,onMarkRead:markNotifRead}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
-        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true)}),
+        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,onTogglePush:async()=>{const p=await pushRequest();const ok=p==='granted';setPushOn(ok);showToast(ok?'🔔 Push notifications enabled':'Push permission denied');}}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'🎉 Listing posted!')]),
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold}),
-          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading}),
-          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>setSellerView(u)}),
+          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('🔖 Saved — check Market for your saved searches')}),
+          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,onOpenReview:(L,seller)=>setReviewFor({L,seller})}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
       !overlayOpen&&!view&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
