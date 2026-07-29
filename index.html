@@ -213,7 +213,7 @@ const DEMO_REVIEWS={
   1:[{r:5,t:'Smooth meet-up at the courts, paddle was exactly as described.',by:'Diana P.',ago:'1w'},{r:5,t:'Fast responder, fair price. Would buy again.',by:'Priya N.',ago:'3w'},{r:4,t:'Good deal, slight delay meeting up but all good.',by:'Travis H.',ago:'1mo'}],
   4:[{r:5,t:'Top seller for a reason — pristine gear, zero hassle.',by:'Marcus W.',ago:'4d'},{r:5,t:'Brand new paddle, met same day. 10/10.',by:'Sarah C.',ago:'2w'}],
   2:[{r:5,t:'Knowledgeable about specs, helped me pick the right grip.',by:'Jake M.',ago:'1w'}],
-  6:[{r:5,t:'Great communication, easy trade.',by:'Carlos R.',ago:'5d'}],
+  6:[{r:5,t:'Great communication, easy sale.',by:'Carlos R.',ago:'5d'}],
 };
 function reviewsFor(sid){
   const stored=kv.get(REVIEWS_KEY,{});
@@ -354,40 +354,174 @@ const suggestedIds=(followSet)=>{
   });
   return Object.entries(score).sort((a,b)=>b[1]-a[1]).map(([id,c])=>({id:isNaN(+id)?id:+id,via:c}));
 };
+// =====================================================================
+// PADDLE DATABASE (PDB)
+// Keyed 'Brand:Model'. Specs drive the listing spec panel, the similarity
+// engine (calcMatch), and the market-price band on LDetail.
+//   core/face/shape/thk/wt/grLen — physical specs
+//   yr    — release year (helps buyers judge how current a paddle is)
+//   avgS  — typical used sale price, low end of the fair band
+//   avgL  — typical used sale price, high end of the fair band
+//   rng   — [absolute floor, absolute ceiling] observed on the used market
+// Paddles not in this table fall back to pdbUnknown() so the UI degrades
+// gracefully instead of silently dropping the spec panel.
+// =====================================================================
 const PDB={
-'Selkirk:Vanguard Power Air Invikta':{core:'Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.4oz',grLen:'Standard',avgS:178,avgL:192,rng:[160,210]},
-'Selkirk:AMPED Invikta':{core:'X5 Polymer',face:'FiberFlex',shape:'Elongated',thk:'13mm',wt:'7.9oz',grLen:'Standard',avgS:118,avgL:128,rng:[95,145]},
-'JOOLA:Hyperion CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Hybrid',thk:'16mm',wt:'7.8oz',grLen:'Standard',avgS:138,avgL:152,rng:[120,165]},
-'JOOLA:Perseus CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Elongated',thk:'16mm',wt:'7.6oz',grLen:'Extended',avgS:158,avgL:175,rng:[140,195]},
-'Engage:Pursuit MX 6.0':{core:'Polymer',face:'Textured Fiberglass',shape:'Elongated',thk:'14mm',wt:'7.6oz',grLen:'Extended',avgS:88,avgL:98,rng:[75,120]},
-'Franklin:Ben Johns Signature':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.5oz',grLen:'Standard',avgS:175,avgL:198,rng:[150,225]},
-'CRBN:CRBN-1X':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.7oz',grLen:'Standard',avgS:160,avgL:178,rng:[140,195]},
-'Six Zero:Double Black Diamond':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.5oz',grLen:'Standard',avgS:172,avgL:188,rng:[155,200]},
-'Head:Radical Elite':{core:'Polymer',face:'Composite',shape:'Standard',thk:'13mm',wt:'8.0oz',grLen:'Standard',avgS:55,avgL:68,rng:[40,85]},
-'Onix:Z5 Graphite':{core:'Nomex',face:'Graphite',shape:'Standard',thk:'13mm',wt:'7.8oz',grLen:'Standard',avgS:42,avgL:52,rng:[30,65]},
+// ---- SELKIRK ----
+'Selkirk:Vanguard Power Air Invikta':{core:'Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.4oz',grLen:'Standard',yr:2023,avgS:178,avgL:192,rng:[160,210]},
+'Selkirk:Vanguard Power Air Epic':{core:'Polymer',face:'Raw T700 Carbon',shape:'Hybrid',thk:'16mm',wt:'7.6oz',grLen:'Standard',yr:2023,avgS:172,avgL:188,rng:[155,205]},
+'Selkirk:Vanguard 2.0 Invikta':{core:'X5 Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:118,avgL:135,rng:[95,155]},
+'Selkirk:Vanguard 2.0 Epic':{core:'X5 Polymer',face:'Raw T700 Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2022,avgS:112,avgL:128,rng:[90,150]},
+'Selkirk:AMPED Invikta':{core:'X5 Polymer',face:'FiberFlex',shape:'Elongated',thk:'13mm',wt:'7.9oz',grLen:'Standard',yr:2019,avgS:88,avgL:105,rng:[70,125]},
+'Selkirk:AMPED Epic':{core:'X5 Polymer',face:'FiberFlex',shape:'Standard',thk:'13mm',wt:'8.0oz',grLen:'Standard',yr:2019,avgS:82,avgL:98,rng:[65,120]},
+'Selkirk:LUXX Control Air Invikta':{core:'Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'20mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:185,avgL:205,rng:[165,225]},
+'Selkirk:LUXX Control Air Epic':{core:'Polymer',face:'Raw T700 Carbon',shape:'Standard',thk:'20mm',wt:'8.1oz',grLen:'Standard',yr:2023,avgS:180,avgL:200,rng:[160,220]},
+'Selkirk:SLK Halo Control XL':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:78,avgL:92,rng:[60,110]},
+'Selkirk:SLK Evo Control 2.0':{core:'Polymer',face:'Fiberglass',shape:'Standard',thk:'13mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:45,avgL:58,rng:[35,72]},
+'Selkirk:Power Air Invikta Cursa':{core:'Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.5oz',grLen:'Standard',yr:2024,avgS:190,avgL:210,rng:[170,235]},
+
+// ---- JOOLA ----
+'JOOLA:Hyperion CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Hybrid',thk:'16mm',wt:'7.8oz',grLen:'Standard',yr:2022,avgS:118,avgL:138,rng:[95,160]},
+'JOOLA:Hyperion CFS 14':{core:'Polypropylene',face:'Carbon Friction',shape:'Hybrid',thk:'14mm',wt:'8.0oz',grLen:'Standard',yr:2022,avgS:112,avgL:132,rng:[90,155]},
+'JOOLA:Hyperion CAS 16':{core:'Polypropylene',face:'Carbon Abrasion',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:135,avgL:155,rng:[115,175]},
+'JOOLA:Perseus CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Elongated',thk:'16mm',wt:'7.6oz',grLen:'Extended',yr:2023,avgS:158,avgL:175,rng:[140,195]},
+'JOOLA:Perseus CFS 14':{core:'Polypropylene',face:'Carbon Friction',shape:'Elongated',thk:'14mm',wt:'7.8oz',grLen:'Extended',yr:2023,avgS:152,avgL:170,rng:[135,190]},
+'JOOLA:Perseus Pro IV 16':{core:'Propulsion Core',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2024,avgS:195,avgL:225,rng:[170,255]},
+'JOOLA:Perseus Pro IV 14':{core:'Propulsion Core',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'8.1oz',grLen:'Extended',yr:2024,avgS:190,avgL:220,rng:[165,250]},
+'JOOLA:Magnus 3 16':{core:'Propulsion Core',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2024,avgS:172,avgL:198,rng:[150,225]},
+'JOOLA:Scorpeus CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:140,avgL:160,rng:[120,180]},
+'JOOLA:Ben Johns Vision CGS 16':{core:'Polypropylene',face:'Carbon Grip',shape:'Standard',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:72,avgL:88,rng:[55,105]},
+'JOOLA:Radius CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Round',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:128,avgL:148,rng:[110,168]},
+
+// ---- CRBN ----
+'CRBN:CRBN-1X':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.7oz',grLen:'Standard',yr:2022,avgS:130,avgL:152,rng:[110,175]},
+'CRBN:CRBN-2X':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Hybrid',thk:'16mm',wt:'7.8oz',grLen:'Standard',yr:2022,avgS:128,avgL:148,rng:[108,170]},
+'CRBN:CRBN-3X':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Standard',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:125,avgL:145,rng:[105,168]},
+'CRBN:CRBN-1X Power Series':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Elongated',thk:'14mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:145,avgL:168,rng:[125,190]},
+'CRBN:TruFoam Genesis 1':{core:'TruFoam',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.1oz',grLen:'Extended',yr:2024,avgS:185,avgL:215,rng:[160,245]},
+'CRBN:TruFoam Genesis 3':{core:'TruFoam',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.2oz',grLen:'Standard',yr:2024,avgS:180,avgL:210,rng:[155,240]},
+
+// ---- SIX ZERO ----
+'Six Zero:Double Black Diamond':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.5oz',grLen:'Standard',yr:2023,avgS:148,avgL:172,rng:[125,195]},
+'Six Zero:Double Black Diamond Control':{core:'Polypropylene',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:145,avgL:168,rng:[122,190]},
+'Six Zero:Black Diamond Power':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'7.8oz',grLen:'Standard',yr:2023,avgS:132,avgL:155,rng:[112,178]},
+'Six Zero:Ruby':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2024,avgS:165,avgL:190,rng:[145,215]},
+'Six Zero:Quartz':{core:'Polypropylene',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2024,avgS:158,avgL:182,rng:[138,205]},
+
+// ---- ENGAGE ----
+'Engage:Pursuit MX 6.0':{core:'Polymer',face:'Textured Fiberglass',shape:'Elongated',thk:'14mm',wt:'7.6oz',grLen:'Extended',yr:2022,avgS:88,avgL:105,rng:[70,125]},
+'Engage:Pursuit Pro MX 6.0':{core:'Polymer',face:'Textured Fiberglass',shape:'Standard',thk:'14mm',wt:'8.0oz',grLen:'Standard',yr:2022,avgS:85,avgL:102,rng:[68,120]},
+'Engage:Pursuit Ultra MX 6.0':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Extended',yr:2023,avgS:118,avgL:140,rng:[98,162]},
+'Engage:Pursuit EX 6.0':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:112,avgL:132,rng:[92,155]},
+'Engage:Encore Pro':{core:'Polymer',face:'Fiberglass',shape:'Standard',thk:'13mm',wt:'8.0oz',grLen:'Standard',yr:2020,avgS:58,avgL:72,rng:[45,90]},
+
+// ---- PADDLETEK ----
+'Paddletek:Bantam TKO-CX 12.7':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'13mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:125,avgL:148,rng:[105,170]},
+'Paddletek:Bantam TKO-CX 14.3':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:128,avgL:150,rng:[108,172]},
+'Paddletek:Tempest Wave Pro':{core:'Polymer',face:'Composite',shape:'Standard',thk:'13mm',wt:'7.8oz',grLen:'Standard',yr:2020,avgS:72,avgL:88,rng:[58,105]},
+'Paddletek:Tempest Reign Pro':{core:'Polymer',face:'Composite',shape:'Elongated',thk:'13mm',wt:'7.9oz',grLen:'Extended',yr:2021,avgS:78,avgL:95,rng:[62,112]},
+'Paddletek:Bantam ESQ-C':{core:'Polymer',face:'Raw Carbon',shape:'Hybrid',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2024,avgS:140,avgL:165,rng:[118,188]},
+
+// ---- FRANKLIN ----
+'Franklin:Ben Johns Signature':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.5oz',grLen:'Standard',yr:2023,avgS:158,avgL:182,rng:[135,205]},
+'Franklin:Signature Pro Series':{core:'Polymer',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:105,avgL:125,rng:[85,145]},
+'Franklin:Carbon STK Pro':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2024,avgS:118,avgL:140,rng:[98,160]},
+
+// ---- HEAD ----
+'Head:Radical Elite':{core:'Polymer',face:'Composite',shape:'Standard',thk:'13mm',wt:'8.0oz',grLen:'Standard',yr:2020,avgS:42,avgL:55,rng:[30,70]},
+'Head:Extreme Tour Lite':{core:'Polymer',face:'Fiberglass',shape:'Elongated',thk:'14mm',wt:'7.7oz',grLen:'Standard',yr:2022,avgS:62,avgL:78,rng:[48,95]},
+'Head:Gravity Tour':{core:'Polymer',face:'Raw Carbon',shape:'Hybrid',thk:'16mm',wt:'8.1oz',grLen:'Standard',yr:2023,avgS:98,avgL:118,rng:[80,138]},
+'Head:Radical Tour Raw':{core:'Polymer',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:92,avgL:112,rng:[75,132]},
+
+// ---- ONIX ----
+'Onix:Z5 Graphite':{core:'Nomex',face:'Graphite',shape:'Standard',thk:'13mm',wt:'7.8oz',grLen:'Standard',yr:2018,avgS:38,avgL:50,rng:[25,65]},
+'Onix:Evoke Premier':{core:'Polymer',face:'Fiberglass',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2021,avgS:72,avgL:90,rng:[55,108]},
+'Onix:Evoke Pro Raw Carbon':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:95,avgL:115,rng:[78,135]},
+'Onix:Malice DB Open':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:105,avgL:128,rng:[85,148]},
+
+// ---- GEARBOX ----
+'Gearbox:CX14E Ultimate Power':{core:'Solid Span',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'8.5oz',grLen:'Extended',yr:2023,avgS:145,avgL:170,rng:[125,195]},
+'Gearbox:CX11E Quad Core':{core:'Solid Span',face:'Raw Carbon',shape:'Elongated',thk:'11mm',wt:'8.0oz',grLen:'Extended',yr:2022,avgS:120,avgL:145,rng:[100,168]},
+'Gearbox:Pro Power Elongated':{core:'Solid Span',face:'Raw Carbon',shape:'Elongated',thk:'14mm',wt:'8.3oz',grLen:'Extended',yr:2024,avgS:165,avgL:190,rng:[142,215]},
+
+// ---- PROKENNEX ----
+'ProKennex:Black Ace Pro':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:132,avgL:155,rng:[112,178]},
+'ProKennex:Black Ace LG':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.1oz',grLen:'Extended',yr:2023,avgS:128,avgL:150,rng:[108,172]},
+'ProKennex:Ovation Speed II':{core:'Polymer',face:'Composite',shape:'Standard',thk:'13mm',wt:'7.6oz',grLen:'Standard',yr:2021,avgS:78,avgL:95,rng:[62,112]},
+
+// ---- DIADEM ----
+'Diadem:Warrior Edge':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:118,avgL:142,rng:[98,165]},
+'Diadem:Vice V2':{core:'Polymer',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:108,avgL:130,rng:[88,152]},
+'Diadem:Hush':{core:'Polymer',face:'Raw Carbon',shape:'Hybrid',thk:'16mm',wt:'8.1oz',grLen:'Standard',yr:2024,avgS:135,avgL:158,rng:[115,180]},
+
+// ---- VULCAN ----
+'Vulcan:V1000':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:95,avgL:115,rng:[78,135]},
+'Vulcan:V940 Hybrid':{core:'Polymer',face:'Raw Carbon',shape:'Hybrid',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2022,avgS:82,avgL:100,rng:[65,120]},
+
+// ---- GAMMA ----
+'Gamma:Obsidian 16mm':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:88,avgL:108,rng:[70,128]},
+'Gamma:Shard':{core:'Polymer',face:'Composite',shape:'Standard',thk:'13mm',wt:'7.9oz',grLen:'Standard',yr:2021,avgS:48,avgL:62,rng:[35,78]},
+
+// ---- WILSON ----
+'Wilson:Blaze Pro V2':{core:'Polymer',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:98,avgL:120,rng:[80,140]},
+'Wilson:Juice Energy':{core:'Polymer',face:'Fiberglass',shape:'Standard',thk:'13mm',wt:'7.9oz',grLen:'Standard',yr:2021,avgS:42,avgL:56,rng:[30,72]},
+
+// ---- ELECTRUM ----
+'Electrum:Model E 16mm':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:105,avgL:128,rng:[85,148]},
+'Electrum:Pro II 16mm':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:125,avgL:148,rng:[105,170]},
+
+// ---- RONBUS ----
+'Ronbus:R1 Pulsar':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:95,avgL:118,rng:[78,138]},
+'Ronbus:Nova R1':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2024,avgS:128,avgL:150,rng:[108,172]},
+
+// ---- LEGACY ----
+'Legacy:Pro':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:118,avgL:140,rng:[98,162]},
+
+// ---- 11SIX24 ----
+'11Six24:Pegasus':{core:'Polypropylene',face:'Raw Carbon',shape:'Elongated',thk:'16mm',wt:'8.0oz',grLen:'Extended',yr:2023,avgS:122,avgL:145,rng:[100,168]},
+'11Six24:Monarch Onyx':{core:'Polypropylene',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:115,avgL:138,rng:[95,158]},
 };
+
+// Brand list is derived from the DB so adding a paddle above automatically
+// makes its brand selectable everywhere (filters, create-listing, wishlist).
+const PADDLE_BRANDS=[...new Set(Object.keys(PDB).map(k=>k.split(':')[0]))].sort();
+// Models for a given brand — powers the model autocomplete on the post flow.
+const pdbModels=(brand)=>Object.keys(PDB).filter(k=>k.split(':')[0]===brand).map(k=>k.split(':')[1]).sort();
+// Total count, surfaced in the UI so the DB's coverage is visible.
+const PDB_COUNT=Object.keys(PDB).length;
+// Graceful fallback: an unrecognized paddle still renders a spec panel with
+// honest "not in our database yet" placeholders rather than vanishing.
+const pdbUnknown=()=>({core:null,face:null,shape:null,thk:null,wt:null,grLen:null,yr:null,avgS:null,avgL:null,rng:null,unknown:true});
 const pdbGet=(b,m)=>PDB[`${b}:${m}`]||null;
+// Case/whitespace-tolerant lookup so user-typed models still match the DB.
+const pdbFind=(b,m)=>{
+  if(!b||!m)return null;
+  const direct=pdbGet(b,m);if(direct)return direct;
+  const nb=String(b).trim().toLowerCase(),nm=String(m).trim().toLowerCase();
+  const hit=Object.keys(PDB).find(k=>{const[kb,km]=k.split(':');return kb.toLowerCase()===nb&&km.toLowerCase()===nm;});
+  return hit?PDB[hit]:null;
+};
 
 let LS=[
 {id:1,cat:'paddle',brand:'Selkirk',model:'Vanguard Power Air Invikta',price:180,orig:260,cond:9,sid:4,type:'sale',dist:0.8,grip:'4 1/4"',desc:'Played ~15 hours. Perfect condition. Comes with original cover.',saves:24,views:187,ago:'2d',loc:'Maryville',tag:'HOT'},
-{id:2,cat:'paddle',brand:'JOOLA',model:'Hyperion CFS 16',price:140,orig:220,cond:7,sid:1,type:'both',dist:1.2,grip:'4 1/8"',desc:'Got the Swift. Trade for Selkirk or Engage.',saves:18,views:203,ago:'1d',loc:'Maryville',tag:'TRADE'},
+{id:2,cat:'paddle',brand:'JOOLA',model:'Hyperion CFS 16',price:140,orig:220,cond:7,sid:1,type:'sale',dist:1.2,grip:'4 1/8"',desc:'Got the Swift, so this one has to go. Cover included.',saves:18,views:203,ago:'1d',loc:'Maryville',tag:null},
 {id:3,cat:'paddle',brand:'Engage',model:'Pursuit MX 6.0',price:95,orig:160,cond:5,sid:3,type:'sale',dist:2.1,grip:'4 1/4"',desc:'Some face wear but plays great.',saves:7,views:89,ago:'5d',loc:'Alcoa',tag:null},
 {id:4,cat:'paddle',brand:'Selkirk',model:'AMPED Invikta',price:120,orig:200,cond:8,sid:6,type:'sale',dist:1.5,grip:'4 1/4"',desc:'Switching to carbon face.',saves:15,views:134,ago:'3d',loc:'Maryville',tag:null},
-{id:5,cat:'paddle',brand:'Franklin',model:'Ben Johns Signature',price:200,orig:280,cond:9,sid:2,type:'trade',dist:3.4,grip:'4 1/8"',desc:'Barely used. Looking for elongated carbon paddles.',saves:31,views:267,ago:'6h',loc:'Knoxville',tag:'NEW'},
+{id:5,cat:'paddle',brand:'Franklin',model:'Ben Johns Signature',price:200,orig:280,cond:9,sid:2,type:'sale',dist:3.4,grip:'4 1/8"',desc:'Barely used. Looking for elongated carbon paddles.',saves:31,views:267,ago:'6h',loc:'Knoxville',tag:'NEW'},
 {id:6,cat:'paddle',brand:'JOOLA',model:'Perseus CFS 16',price:165,orig:250,cond:10,sid:4,type:'sale',dist:0.8,grip:'4 1/8"',desc:'Brand new, never played.',saves:42,views:312,ago:'12h',loc:'Maryville',tag:'HOT'},
 {id:7,cat:'paddle',brand:'CRBN',model:'CRBN-1X',price:155,orig:200,cond:8,sid:7,type:'sale',dist:18.4,grip:'4 1/4"',desc:'Lightly played, comes with cover.',saves:8,views:62,ago:'2d',loc:'Sevierville',tag:null},
 {id:8,cat:'paddle',brand:'Six Zero',model:'Double Black Diamond',price:165,orig:200,cond:9,sid:8,type:'sale',dist:165.2,grip:'4 1/4"',desc:'Like new. Will ship for $10.',saves:5,views:41,ago:'3d',loc:'Nashville',tag:null},
-{id:101,cat:'shoes',brand:'Asics',model:'Gel-Rocket 11',price:45,orig:80,cond:8,sid:1,type:'sale',dist:1.2,sz:'10.5',gender:'Mens',desc:'Worn 5 times.',saves:6,views:54,ago:'3d',loc:'Maryville',tag:null},
-{id:201,cat:'bag',brand:'Selkirk',model:'Pro Team Bag',price:65,orig:120,cond:9,sid:2,type:'sale',dist:3.4,btype:'Backpack',desc:'Fits 3 paddles.',saves:9,views:67,ago:'4d',loc:'Knoxville',tag:null},
-{id:401,cat:'accessories',brand:'Franklin',model:'X-40 Balls (6-pack)',price:15,orig:28,cond:10,sid:4,type:'sale',dist:0.8,desc:'Unopened.',saves:11,views:89,ago:'1d',loc:'Maryville',tag:'NEW'},
+{id:101,cat:'gear',sub:'Shoes',brand:'Asics',model:'Gel-Rocket 11',price:45,orig:80,cond:8,sid:1,type:'sale',dist:1.2,sz:'10.5',gender:'Mens',desc:'Worn 5 times.',saves:6,views:54,ago:'3d',loc:'Maryville',tag:null},
+{id:201,cat:'gear',sub:'Bag',brand:'Selkirk',model:'Pro Team Bag',price:65,orig:120,cond:9,sid:2,type:'sale',dist:3.4,btype:'Backpack',desc:'Fits 3 paddles.',saves:9,views:67,ago:'4d',loc:'Knoxville',tag:null},
+{id:401,cat:'gear',sub:'Accessory',brand:'Franklin',model:'X-40 Balls (6-pack)',price:15,orig:28,cond:10,sid:4,type:'sale',dist:0.8,desc:'Unopened.',saves:11,views:89,ago:'1d',loc:'Maryville',tag:'NEW'},
 // --- Auction listing: bids array drives the live bidding UI on LDetail ---
 {id:9,cat:'paddle',brand:'CRBN',model:'CRBN-1X',price:110,orig:200,cond:8,sid:6,type:'sale',dist:1.5,grip:'4 1/4"',desc:'Selling to the highest bidder — ends in 2 days. Cover included.',saves:19,views:151,ago:'8h',loc:'Maryville',tag:'HOT',
  auction:true,endsAt:new Date(Date.now()+1000*60*60*46).toISOString(),
  bids:[{by:'Travis H.',amount:120,t:'6h ago'},{by:'Sarah C.',amount:128,t:'2h ago'}]},
-{id:102,cat:'shoes',brand:'K-Swiss',model:'Express Light Pickleball',price:58,orig:110,cond:9,sid:6,type:'sale',dist:1.5,sz:'9',gender:'Womens',desc:'Only worn indoors a handful of times.',saves:4,views:38,ago:'2d',loc:'Maryville',tag:null},
-{id:301,cat:'apparel',brand:'Selkirk',model:'Pro Line Polo',price:28,orig:60,cond:9,sid:2,type:'sale',dist:3.4,sz:'L',gender:'Mens',desc:'Worn twice, no stains or pilling.',saves:3,views:29,ago:'4d',loc:'Knoxville',tag:null},
+{id:102,cat:'gear',sub:'Shoes',brand:'K-Swiss',model:'Express Light Pickleball',price:58,orig:110,cond:9,sid:6,type:'sale',dist:1.5,sz:'9',gender:'Womens',desc:'Only worn indoors a handful of times.',saves:4,views:38,ago:'2d',loc:'Maryville',tag:null},
+{id:301,cat:'gear',sub:'Apparel',brand:'Selkirk',model:'Pro Line Polo',price:28,orig:60,cond:9,sid:2,type:'sale',dist:3.4,sz:'L',gender:'Mens',desc:'Worn twice, no stains or pilling.',saves:3,views:29,ago:'4d',loc:'Knoxville',tag:null},
 ];
-LS.forEach(l=>{if(l.cat==='paddle'){const d=pdbGet(l.brand,l.model);if(d)Object.assign(l,{core:d.core,face:d.face,shape:d.shape,thk:d.thk,wt:d.wt,grLen:d.grLen,avgS:d.avgS,avgL:d.avgL,rng:d.rng});}});
+LS.forEach(l=>{if(l.cat==='paddle'){const d=pdbFind(l.brand,l.model);if(d)Object.assign(l,{core:d.core,face:d.face,shape:d.shape,thk:d.thk,wt:d.wt,grLen:d.grLen,yr:d.yr,avgS:d.avgS,avgL:d.avgL,rng:d.rng});}});
 
 let SOLD=[
 {id:'s1',brand:'CRBN',model:'CRBN-1X',price:150,orig:200,dist:0.8,ago:'2h',loc:'Maryville'},
@@ -408,14 +542,13 @@ function computeSavedStatus(L,meta){
   return{type:'available',label:'Still available',col:'#14B8A6'};
 }
 
-const TM=[{id:'t1',u:US[0],yh:{brand:'Head',model:'Radical Elite',cond:7},th:{brand:'JOOLA',model:'Hyperion CFS 16',cond:7},dist:1.2,compat:94},{id:'t2',u:US[3],yh:{brand:'Onix',model:'Z5 Graphite',cond:6},th:{brand:'Engage',model:'Pursuit MX 6.0',cond:8},dist:0.8,compat:88}];
-const GEAR=[{id:'g1',brand:'Head',model:'Radical Elite',cond:7,w:['sell','trade'],p:60},{id:'g2',brand:'Onix',model:'Z5 Graphite',cond:6,w:['sell'],p:45},{id:'g3',brand:'Wilson',model:'Clash Pro',cond:8,w:[],p:null}];
+const GEAR=[{id:'g1',brand:'Head',model:'Radical Elite',cond:7,w:['sell'],p:60},{id:'g2',brand:'Onix',model:'Z5 Graphite',cond:6,w:['sell'],p:45},{id:'g3',brand:'Wilson',model:'Clash Pro',cond:8,w:[],p:null}];
 const WISH=[{id:'w1',brand:'Selkirk',model:'Vanguard Power Air Invikta',maxP:200},{id:'w2',brand:'JOOLA',model:'Hyperion CFS 16',maxP:150},{id:'w3',brand:'Engage',model:'Poach Pursuit',maxP:120}];
-const NOTIFS=[{id:1,type:'wishlist',ic:'flame',title:'Wishlist match!',msg:'Selkirk Vanguard Power Air Invikta listed nearby',time:'5m',unread:true,listingId:1,detail:'$180 · 0.8mi'},{id:2,type:'msg',ic:'message',title:'New message from Marcus',msg:'I can do $160 if you can meet this weekend',time:'2m',unread:true},{id:3,type:'trade',ic:'swap',title:'New trade match',msg:'Diana Park wants your Onix Z5',time:'1h',unread:true},{id:4,type:'pricedrop',ic:'dollar',title:'Price drop on saved',msg:'JOOLA Perseus dropped $185 → $165',time:'3h',unread:false,listingId:6}];
+const NOTIFS=[{id:1,type:'wishlist',ic:'flame',title:'Wishlist match!',msg:'Selkirk Vanguard Power Air Invikta listed nearby',time:'5m',unread:true,listingId:1,detail:'$180 · 0.8mi'},{id:2,type:'msg',ic:'message',title:'New message from Marcus',msg:'I can do $160 if you can meet this weekend',time:'2m',unread:true},{id:3,type:'sale',ic:'swap',title:'New trade match',msg:'Diana Park wants your Onix Z5',time:'1h',unread:true},{id:4,type:'pricedrop',ic:'dollar',title:'Price drop on saved',msg:'JOOLA Perseus dropped $185 → $165',time:'3h',unread:false,listingId:6}];
 
 const MSGS_INIT=[
 {id:1,wu:US[0],last:"Hoping for closer to $175...",time:'2m',unread:2,ref:{b:'Selkirk',m:'Vanguard Power Air',p:180,id:1},isM:false,dealStatus:'negotiating',cv:[{f:'o',kind:'text',msg:"Hey! Is the Selkirk still available?",t:'10:30'},{f:'m',kind:'text',msg:"Yes! Great condition.",t:'10:35'},{f:'o',kind:'offer',amount:160,listingRef:{b:'Selkirk',m:'Vanguard Power Air',p:180},status:'pending',t:'10:40'},{f:'m',kind:'text',msg:"Hoping for closer to $175...",t:'10:42'}]},
-{id:2,wu:US[3],last:"We matched! Let's connect",time:'1h',unread:1,ref:{b:'Engage',m:'Pursuit MX',isT:true},isM:true,dealStatus:'browsing',cv:[{f:'o',kind:'text',msg:"Hey! We matched on a trade.",t:'9:00'},{f:'o',kind:'text',msg:"Let's connect",t:'9:01'}]},
+{id:2,wu:US[3],last:"Is the Engage still available?",time:'1h',unread:1,ref:{b:'Engage',m:'Pursuit MX',p:95,id:3},isM:false,dealStatus:'browsing',cv:[{f:'o',kind:'text',msg:"Hey! Is the Engage still available?",t:'9:00'},{f:'o',kind:'text',msg:"Happy to meet at the Maryville courts.",t:'9:01'}]},
 {id:3,wu:US[1],last:"Works for me!",time:'3h',unread:0,ref:{b:'Franklin',m:'Ben Johns Signature',p:200,id:5},isM:false,dealStatus:'accepted',cv:[{f:'o',kind:'text',msg:"Interested in the Franklin",t:'8:00'},{f:'m',kind:'buynow',amount:200,listingRef:{b:'Franklin',m:'Ben Johns Signature',p:200},status:'accepted',t:'8:05'},{f:'o',kind:'accept',amount:200,listingRef:{b:'Franklin',m:'Ben Johns Signature'},t:'8:10'},{f:'o',kind:'text',msg:"Meet at Maryville Courts Sat 10am?",t:'8:15'},{f:'m',kind:'text',msg:"Works for me!",t:'8:20'}]},
 {id:4,wu:US[5],last:"What's the edge guard like?",time:'1d',unread:1,ref:{b:'Selkirk',m:'AMPED Invikta',p:120,id:4},isM:false,dealStatus:'browsing',cv:[{f:'o',kind:'text',msg:"Love the AMPED!",t:'Yest'},{f:'o',kind:'text',msg:"What's the edge guard like?",t:'Yest'}]},
 ];
@@ -533,7 +666,7 @@ function mapConversation(row,meId){
     id:row.id,wu,isM:!!row.is_match,unread,
     time:row.last_message_at?timeAgo(row.last_message_at):'—',
     last:lastTxt,dealStatus:row.deal_status||'browsing',
-    ref:list?{b:list.brand,m:list.model,p:list.price==null?null:Number(list.price),id:list.id,isT:list.type==='trade'}:{b:'—',m:'—'},
+    ref:list?{b:list.brand,m:list.model,p:list.price==null?null:Number(list.price),id:list.id,isT:false}:{b:'—',m:'—'},
     cv,
   };
 }
@@ -541,7 +674,7 @@ const ccol=(s)=>s>=9?C.ok:s>=7?C.lm:s>=5?C.am:C.rd;
 const clbl=(s)=>s===10?'Brand New':s>=9?'Like New':s>=7?'Good':s>=5?'Fair':'Heavy Use';
 const tcol=(s)=>s>=95?C.ok:s>=85?C.lm:C.am;
 // CI (emoji categories) retired — see CAT_ICON + the Ic component for the SVG icon set.
-const CL={paddle:'Paddle',shoes:'Shoes',bag:'Bag',apparel:'Apparel',accessories:'Accessories'};
+const CL={paddle:'Paddle',gear:'Gear'};
 const wtClass=(w)=>{const v=parseFloat(w);return v<7.6?'Light':v<=8.0?'Mid':'Heavy';};
 const calcMatch=(a,b)=>{if(!a||!b)return 0;if(a.brand===b.brand&&a.model===b.model)return 100;let m=0,t=0;['core','face','shape','thk','grLen'].forEach(k=>{t++;if(a[k]&&b[k]&&a[k]===b[k])m++;});t++;const wA=parseFloat(a.wt),wB=parseFloat(b.wt);if(wA&&wB&&Math.abs(wA-wB)<=0.2)m++;return Math.round((m/t)*100);};
 const findSimilar=(target,n=4)=>!target?[]:LS.filter(l=>l.cat==='paddle'&&!(l.brand===target.brand&&l.model===target.model)).map(l=>({l,m:calcMatch(l,target)})).filter(x=>x.m>=50).sort((a,b)=>b.m-a.m).slice(0,n);
@@ -640,7 +773,14 @@ function Ic({n,s=16,c='currentColor',fill=false,sw=1.75,style}){
   },[e('path',{key:'p',d})]);
 }
 // Category → icon name, replacing the CI emoji map
-const CAT_ICON={paddle:'paddle',shoes:'shoe',bag:'bag',apparel:'shirt',accessories:'bolt'};
+// Gear is a catch-all (shoes, bags, apparel, accessories). GEAR_SUB_ICON keeps
+// the specific icon for a listing's subtype so a mixed Gear feed stays readable.
+const CAT_ICON={paddle:'paddle',gear:'bag'};
+const GEAR_SUB_ICON={Shoes:'shoe',Bag:'bag',Apparel:'shirt',Accessory:'bolt'};
+const GEAR_SUBS=['Shoes','Bag','Apparel','Accessory'];
+const GEAR_BRANDS=['Adidas','Asics','Fila','Franklin','Gamma','Head','JOOLA','K-Swiss','Lululemon','New Balance','Nike','Onix','Selkirk','Skechers','Tourna','Vulcan'];
+// Icon for any listing — paddle icon, or the gear subtype icon when known.
+const listIcon=(l)=>l.cat==='paddle'?'paddle':(GEAR_SUB_ICON[l.sub]||'bag');
 // Inline label helper: icon + text on a shared baseline (replaces emoji-in-template-string labels)
 function IcTxt({n,children,s=10,c,gap=4,style,weight}){
   return e('span',{style:{display:'inline-flex',alignItems:'center',gap,...(style||{})}},[
@@ -690,15 +830,15 @@ function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showV
   }));}
 function CB({c}){const col=ccol(c);return e('span',{style:{display:'inline-flex',alignItems:'center',gap:3,fontSize:10,color:col,fontWeight:600}},[e('span',{key:'d',style:{width:5,height:5,borderRadius:'50%',background:col}}),clbl(c)]);}
 function PSv({col=C.bd,sz=52}){return e('svg',{width:sz,height:sz*1.4,viewBox:'0 0 60 84',style:{flexShrink:0}},[e('ellipse',{key:'h',cx:30,cy:28,rx:22,ry:25,fill:col}),e('rect',{key:'hn',x:23,y:50,width:14,height:28,rx:5,fill:col})]);}
-function TP({t}){if(!t)return null;const cf={HOT:{bg:C.cta,tx:'#fff'},NEW:{bg:C.ok,tx:'#fff'},TRADE:{bg:C.tl,tx:'#fff'}};const{bg,tx}=cf[t]||{bg:C.bd,tx:C.tx};return e('span',{style:{fontSize:9,fontWeight:800,background:bg,color:tx,borderRadius:6,padding:'2px 8px'}},t);}
+function TP({t}){if(!t)return null;const cf={HOT:{bg:C.cta,tx:'#fff'},NEW:{bg:C.ok,tx:'#fff'}};const{bg,tx}=cf[t]||{bg:C.bd,tx:C.tx};return e('span',{style:{fontSize:9,fontWeight:800,background:bg,color:tx,borderRadius:6,padding:'2px 8px'}},t);}
 function MatchPct({pct}){const col=pct>=80?C.ok:pct>=65?C.lm:C.am;return e('span',{style:{fontSize:9,fontWeight:800,color:col,background:col+'20',borderRadius:6,padding:'2px 6px'}},`${pct}%`);}
 
 function LCard({L,onView,saved,onSave,showMatch,large}){
   const u=gU(L.sid);
   return e('div',{onClick:onView,'data-press':'1',style:{background:C.cd,borderRadius:13,border:`1px solid ${C.bd}`,overflow:'hidden',cursor:'pointer',boxShadow:'var(--sh-1)'}},[
     e('div',{key:'i',style:{height:large?138:108,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}},[
-      L.photos&&L.photos[0]?e('img',{src:L.photos[0],loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',transition:'transform var(--dur-3) var(--ease-out)'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'55',sz:large?56:42}):e(Ic,{n:CAT_ICON[L.cat],s:large?38:30,c:C.mt+'80',sw:1.5}),
-      e('div',{key:'bc',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'2px 7px',fontSize:9,fontWeight:800,color:C.tx,border:`1px solid ${C.bd}`,display:'flex',alignItems:'center',gap:4,boxShadow:'var(--sh-1)'}},[e(Ic,{key:'i',n:CAT_ICON[L.cat],s:10}),CL[L.cat]]),
+      L.photos&&L.photos[0]?e('img',{src:L.photos[0],loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',transition:'transform var(--dur-3) var(--ease-out)'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'55',sz:large?56:42}):e(Ic,{n:listIcon(L),s:large?38:30,c:C.mt+'80',sw:1.5}),
+      L.cat==='gear'&&e('div',{key:'bc','aria-label':L.sub||'Gear',title:L.sub||'Gear',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'3px 5px',border:`1px solid ${C.bd}`,display:'flex',alignItems:'center',boxShadow:'var(--sh-1)'}},[e(Ic,{key:'i',n:listIcon(L),s:11,c:C.tx})]),
       L.tag&&e('div',{key:'t',style:{position:'absolute',top:6,right:6}},[e(TP,{t:L.tag})]),
       e('div',{key:'sv',onClick:ev=>{ev.stopPropagation();onSave(L.id);},style:{position:'absolute',bottom:6,right:6,width:24,height:24,background:C.cd,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:`1px solid ${saved?C.lm:C.bd}`,color:saved?C.lm:C.mt,boxShadow:'var(--sh-1)'}},[e(Ic,{n:'heart',s:12,fill:saved})]),
       e('div',{key:'d',style:{position:'absolute',bottom:6,left:6,fontSize:9,color:'#fff',background:'rgba(31,41,51,0.62)',backdropFilter:'blur(4px)',borderRadius:6,padding:'2px 7px',display:'flex',alignItems:'center',gap:3}},[e(Ic,{key:'i',n:'pin',s:9}),e('span',{key:'t',className:'tnum'},`${L.dist}mi`)]),
@@ -706,7 +846,7 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
     e('div',{key:'inf',style:{padding:'8px 10px'}},[
       e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:9,color:C.lm,fontWeight:800}},L.brand),showMatch&&e(MatchPct,{pct:showMatch})]),
       e('div',{key:'mo',style:{fontSize:11,fontWeight:700,color:C.tx,lineHeight:1.2,marginBottom:4}},L.model),
-      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}},[L.type!=='trade'?e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,letterSpacing:'-0.02em'}},`$${L.price}`):e('span',{style:{fontSize:10,fontWeight:700,color:C.tl}},'Trade'),e(CB,{c:L.cond})]),
+      e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}},[e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,letterSpacing:'-0.02em'}},`$${L.price}`),e(CB,{c:L.cond})]),
       e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),isFollowing(u.id)&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px',flexShrink:0,display:'inline-flex',alignItems:'center',gap:2}},[e(Ic,{key:'i',n:'check',s:8,sw:3}),'Following'])]),u.sales>0&&e('span',{style:{fontSize:9,color:C.mt}},`${u.sales} sales`)]),
       (followerCount(u.id)>0||mutualCount(u.id)>0)&&e('div',{key:'soc',style:{display:'flex',alignItems:'center',gap:6,marginTop:4,paddingTop:4,borderTop:`1px solid ${C.dm}`}},[
         followerCount(u.id)>0&&e(IcTxt,{key:'fc',n:'users',s:9,style:{fontSize:9,color:C.mt,fontWeight:700}},`${followerCount(u.id)} followers`),
@@ -753,7 +893,7 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
       await sb.from('profiles').update({cashapp:cleaned.cashapp,venmo:cleaned.venmo}).eq('id',me.id);
       await sb.from('user_settings').update({
         notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
-        notif_trades:s.notifTrades,notif_messages:s.notifMessages,
+        notif_messages:s.notifMessages,
         precise_location:s.preciseLoc,
       }).eq('user_id',me.id);
     }
@@ -779,7 +919,6 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
       e(Sec,{title:'NOTIFICATIONS',key:'nt'},[
         e(Row,{key:'wm',label:'Wishlist matches',desc:'When wishlist paddles list nearby',r:e(Tog,{on:s.notifWishlist,onChange:()=>up('notifWishlist',!s.notifWishlist)})}),
         e(Row,{key:'pd',label:'Price drops',desc:'On listings you saved',r:e(Tog,{on:s.notifPriceDrops,onChange:()=>up('notifPriceDrops',!s.notifPriceDrops)})}),
-        e(Row,{key:'tm',label:'Trade matches',r:e(Tog,{on:s.notifTrades,onChange:()=>up('notifTrades',!s.notifTrades)})}),
         e(Row,{key:'ms',label:'Messages',r:e(Tog,{on:s.notifMessages,onChange:()=>up('notifMessages',!s.notifMessages)})}),
         e(Row,{key:'push',label:'Push notifications',desc:pushOn?'Enabled on this device':'Get alerts even when the app is closed',r:e('button',{onClick:()=>{if(!pushOn&&onTogglePush)onTogglePush();},style:{padding:'5px 12px',borderRadius:8,border:`1px solid ${pushOn?C.ok:C.lm}`,background:pushOn?C.ok+'15':C.lm,color:pushOn?C.ok:'#fff',fontSize:10,fontWeight:800,cursor:pushOn?'default':'pointer'}},pushOn?e(IcTxt,{n:'check',s:12},'On'):'Enable')}),
       ]),
@@ -877,15 +1016,20 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
     }
     return()=>{on=false;};
   },[L.sid,meId,following]);
-  const sv=L.type!=='trade'?(L.orig-L.price):0;
-  const pct=L.type!=='trade'?Math.round((sv/L.orig)*100):0;
+  const sv=L.orig-L.price;
+  const pct=Math.round((sv/L.orig)*100);
   const sp=[];
-  if(L.cat==='paddle')sp.push(['Core',L.core],['Face',L.face],['Shape',L.shape],['Thickness',L.thk],['Weight',L.wt],['Grip',L.grip]);
-  else if(L.cat==='shoes')sp.push(['Size',L.sz],['Gender',L.gender]);
-  else if(L.cat==='bag')sp.push(['Type',L.btype]);
+  if(L.cat==='paddle'){
+    sp.push(['Core',L.core],['Face',L.face],['Shape',L.shape],['Thickness',L.thk],['Weight',L.wt],['Grip',L.grip]);
+    if(L.yr)sp.push(['Released',String(L.yr)]);
+  } else {
+    if(L.sub)sp.push(['Type',L.sub]);
+    if(L.sz)sp.push(['Size',L.sz]);
+    if(L.gender)sp.push(['Gender',L.gender]);
+    if(L.btype)sp.push(['Bag Style',L.btype]);
+  }
   sp.push(['Condition',clbl(L.cond)],['Posted',L.ago+' ago']);
   const similar=L.cat==='paddle'?findSimilar(L,4):[];
-  const isTrade=L.type==='trade';
   const isAuction=!!L.auction;
   const curTop=bids.length?Math.max(...bids.map(b=>b.amount)):L.price;
   const auctionInfo=isAuction?auctionTimeLeft(L.endsAt):null;
@@ -929,7 +1073,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
         currentPhoto?[
           !photoLoaded[photoIdx]&&e('div',{key:'sk',style:{position:'absolute',inset:0,background:`linear-gradient(90deg, ${C.dm} 0%, ${C.bd}80 50%, ${C.dm} 100%)`,backgroundSize:'200% 100%',animation:'shimmer 1.4s infinite'}}),
           e('img',{key:'im',src:currentPhoto,onLoad:()=>setPhotoLoaded(p=>({...p,[photoIdx]:true})),style:{width:'100%',height:'100%',objectFit:'cover',opacity:photoLoaded[photoIdx]?1:0,transition:'opacity .2s'}}),
-        ]:L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'70',sz:108}):e(Ic,{n:CAT_ICON[L.cat],s:72,c:C.mt+'70',sw:1.25}),
+        ]:L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'70',sz:108}):e(Ic,{n:listIcon(L),s:72,c:C.mt+'70',sw:1.25}),
         // Tap arrows (visible when >1 photo)
         photos.length>1&&photoIdx>0&&e('button',{key:'pv',onClick:()=>{setPhotoIdx(i=>i-1);haptic();},style:{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2,backdropFilter:'blur(4px)'}},[e(Ic,{n:'chevronL',s:16,c:'#fff',sw:2.5})]),
         photos.length>1&&photoIdx<photos.length-1&&e('button',{key:'nx',onClick:()=>{setPhotoIdx(i=>i+1);haptic();},style:{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2,backdropFilter:'blur(4px)'}},[e(Ic,{n:'chevron',s:16,c:'#fff',sw:2.5})]),
@@ -944,11 +1088,10 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
           e('div',{style:{fontSize:10,color:C.lm,fontWeight:800,letterSpacing:.5}},L.brand.toUpperCase()),
           e('div',{style:{fontSize:19,fontWeight:900,color:C.tx,lineHeight:1.2,marginTop:2}},L.model),
           e('div',{style:{marginTop:8,display:'flex',alignItems:'baseline',gap:11,flexWrap:'wrap'}},[
-            isTrade?e('span',{style:{fontSize:22,fontWeight:800,color:C.tl}},'Trade Only'):e('div',{style:{display:'flex',alignItems:'baseline',gap:8}},[e('span',{className:'tnum',style:{fontSize:30,fontWeight:800,color:C.lm,letterSpacing:'-0.03em'}},`$${L.price}`),e('span',{className:'tnum',style:{fontSize:11,color:C.mt,textDecoration:'line-through'}},`$${L.orig}`),e('span',{style:{fontSize:10,color:C.tl,fontWeight:700,background:C.tl+'20',borderRadius:5,padding:'2px 6px'}},`-${pct}%`)]),
-            L.type==='both'&&e(IcTxt,{n:'swap',s:11,style:{fontSize:10,color:C.tl,background:C.tl+'15',borderRadius:7,padding:'3px 8px',border:`1px solid ${C.tl}40`,fontWeight:700}},'Trade OK'),
+            e('div',{style:{display:'flex',alignItems:'baseline',gap:8}},[e('span',{className:'tnum',style:{fontSize:30,fontWeight:800,color:C.lm,letterSpacing:'-0.03em'}},`$${L.price}`),e('span',{className:'tnum',style:{fontSize:11,color:C.mt,textDecoration:'line-through'}},`$${L.orig}`),e('span',{style:{fontSize:10,color:C.tl,fontWeight:700,background:C.tl+'20',borderRadius:5,padding:'2px 6px'}},`-${pct}%`)]),
           ]),
         ]),
-        L.cat==='paddle'&&L.avgS&&!isTrade&&!sold&&e('div',{key:'mkt',style:{background:L.price<L.avgS?C.ok+'12':L.price>L.avgL?C.am+'12':C.lm+'12',borderRadius:11,padding:'9px 11px',border:`1px solid ${L.price<L.avgS?C.ok+'40':L.price>L.avgL?C.am+'40':C.lm+'40'}`,display:'flex',alignItems:'center',gap:9}},[
+        L.cat==='paddle'&&L.avgS&&!sold&&e('div',{key:'mkt',style:{background:L.price<L.avgS?C.ok+'12':L.price>L.avgL?C.am+'12':C.lm+'12',borderRadius:11,padding:'9px 11px',border:`1px solid ${L.price<L.avgS?C.ok+'40':L.price>L.avgL?C.am+'40':C.lm+'40'}`,display:'flex',alignItems:'center',gap:9}},[
           e(Ic,{n:L.price<L.avgS?'trendDown':L.price>L.avgL?'trend':'scale',s:19,c:L.price<L.avgS?C.ok:L.price>L.avgL?C.am:C.lm}),
           e('div',{style:{flex:1}},[e('div',{style:{fontSize:11,fontWeight:800,color:L.price<L.avgS?C.ok:L.price>L.avgL?C.am:C.lm}},L.price<L.avgS?`Great deal — $${L.avgS-L.price} below avg`:L.price>L.avgL?`Above market — $${L.price-L.avgL} over avg`:'Fair price — typical for this paddle'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Avg sold $${L.avgS} · Avg listed $${L.avgL}`)]),
         ]),
@@ -981,7 +1124,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
             e('div',{style:{fontSize:9,color:C.mt,marginTop:8,lineHeight:1.45}},'Highest bidder at close arranges pickup with the seller. Bids are commitments — only bid what you intend to pay.'),
           ]),
         ]),
-        L.cat==='paddle'&&!isTrade&&!isAuction&&e('div',{key:'ph'},[e(PriceHistoryChart,{L})]),
+        L.cat==='paddle'&&!isAuction&&e('div',{key:'ph'},[e(PriceHistoryChart,{L})]),
         e('div',{key:'desc'},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3,marginBottom:5}},'DESCRIPTION'),e('div',{style:{fontSize:12,color:C.tx,lineHeight:1.6}},L.desc)]),
         e('div',{key:'sl',style:{background:C.sf,borderRadius:11,padding:11}},[
           e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}},[e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3}},'SELLER'),e(Ic,{n:'chevron',s:14,c:C.mt})]),
@@ -1007,7 +1150,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
       ]),
     ]),
     !sold&&e('div',{key:'ftr',style:{position:'absolute',bottom:0,left:0,right:0,padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',gap:7,boxShadow:`0 -4px 16px rgba(0,0,0,0.08)`}},[
-      isTrade?e('button',{onClick:()=>{haptic('medium');onMsg();},style:{flex:1,padding:'13px 0',borderRadius:11,background:C.tl,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:7,boxShadow:'var(--sh-2)'}},[e(Ic,{key:'i',n:'swap',s:16,sw:2}),'Propose Trade']):[
+      ...[
         e('button',{key:'b',onClick:()=>{haptic('medium');onBuyNow();},style:{flex:2,padding:'13px 0',borderRadius:11,background:C.cta,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff',boxShadow:'var(--sh-2)'}},`Buy Now · $${L.price}`),
         e('button',{key:'o',onClick:()=>{haptic();onMakeOffer();},style:{flex:1,padding:'13px 0',borderRadius:11,background:'transparent',border:`1.5px solid ${C.lm}`,cursor:'pointer',fontSize:12,fontWeight:700,color:C.lm}},'Offer'),
       ],
@@ -1034,28 +1177,26 @@ function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
       const isSold=st.type==='sold';
       return e('div',{key:l.id,style:{background:C.cd,borderRadius:13,border:`1px solid ${st.type==='pricedrop'?C.lm+'40':st.type==='sold'?C.rd+'30':C.bd}`,overflow:'hidden',opacity:isSold?.65:1}},[
         e('div',{style:{padding:'5px 11px',background:st.type==='pricedrop'?C.lm+'15':st.type==='sold'?C.rd+'15':C.tl+'10',display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{width:5,height:5,borderRadius:'50%',background:st.col}}),e('span',{style:{fontSize:10,color:st.col,fontWeight:700}},st.label)])]),
-        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e(Ic,{n:CAT_ICON[l.cat],s:24,c:C.mt+'90',sw:1.5})]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},l.model),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),l.type!=='trade'?e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`):e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Trade'),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
+        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e(Ic,{n:listIcon(l),s:24,c:C.mt+'90',sw:1.5})]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},l.model),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
       ]);
     }))),
   ]);
 }
 
-const initFilters={brands:[],modelQ:'',cond:'All',type:'All',maxP:300,maxD:25,core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',gender:'All',size:'All',btype:'All'};
-const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(f.type!=='All')c++;if(f.maxP<300)c++;if(f.maxD!==25)c++;['core','face','shape','weight','thk','grLen','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
+const initFilters={brands:[],modelQ:'',cond:'All',maxP:300,maxD:25,core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',sub:'All',gender:'All',size:'All',btype:'All'};
+const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(f.maxP<300)c++;if(f.maxD!==25)c++;['core','face','shape','weight','thk','grLen','sub','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
 
 function FilterPanel({onClose,onApply,filters,cat}){
   const [f,setF]=useState({...filters});
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
   const togBrand=(b)=>setF(x=>({...x,brands:x.brands.includes(b)?x.brands.filter(y=>y!==b):[...x.brands,b]}));
   const reset=()=>setF({...initFilters});
+  // Paddle brands come straight from the paddle DB so the two never drift.
   const BRAND_MAP={
-    'Paddles':['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson'],
-    'Shoes':['Asics','New Balance','Nike','Adidas','K-Swiss','Skechers','Fila'],
-    'Bags':['Selkirk','JOOLA','Franklin','Onix','Head','Vulcan'],
-    'Apparel':['Selkirk','JOOLA','Nike','Adidas','Franklin','Lululemon'],
-    'Accessories':['Franklin','Onix','Selkirk','Gamma','Tourna','Head'],
+    'Paddles':PADDLE_BRANDS,
+    'Gear':GEAR_BRANDS,
   };
-  const BRANDS=BRAND_MAP[cat]||BRAND_MAP['Paddles'];
+  const BRANDS=BRAND_MAP[cat]||[...new Set([...PADDLE_BRANDS,...GEAR_BRANDS])].sort();
   const SHOE_SZ=['All','7','7.5','8','8.5','9','9.5','10','10.5','11','11.5','12','13'];
   const AP_SZ=['All','XS','S','M','L','XL','XXL'];
   const Sec=({title,c})=>e('div',{style:{marginBottom:14}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:7}},title),c]);
@@ -1065,17 +1206,14 @@ function FilterPanel({onClose,onApply,filters,cat}){
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},[
       e(Sec,{title:'BRAND',c:e(Pills,{opts:BRANDS,sel:f.brands,onSel:togBrand,multi:true})}),
       cat==='Paddles'&&[e(Sec,{key:'co',title:'CORE',c:e(Pills,{opts:['All','Polymer','Polypropylene','Nomex'],sel:f.core,onSel:v=>up('core',v)})}),e(Sec,{key:'fa',title:'FACE',c:e(Pills,{opts:['All','Raw T700 Carbon','Raw Carbon','Carbon Friction','Graphite','Composite'],sel:f.face,onSel:v=>up('face',v)})}),e(Sec,{key:'sh',title:'SHAPE',c:e(Pills,{opts:['All','Standard','Hybrid','Elongated'],sel:f.shape,onSel:v=>up('shape',v)})}),e(Sec,{key:'wt',title:'WEIGHT',c:e(Pills,{opts:['All','Light','Mid','Heavy'],sel:f.weight,onSel:v=>up('weight',v)})}),e(Sec,{key:'tk',title:'THICKNESS',c:e(Pills,{opts:['All','13mm','14mm','16mm'],sel:f.thk,onSel:v=>up('thk',v)})})],
-      cat==='Shoes'&&[
-        e(Sec,{key:'sg',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
-        e(Sec,{key:'ss',title:'SIZE',c:e(Pills,{opts:SHOE_SZ,sel:f.size,onSel:v=>up('size',v)})}),
+      cat==='Gear'&&[
+        e(Sec,{key:'gt',title:'GEAR TYPE',c:e(Pills,{opts:['All',...GEAR_SUBS],sel:f.sub,onSel:v=>up('sub',v)})}),
+        (f.sub==='Shoes'||f.sub==='Apparel')&&e(Sec,{key:'gg',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
+        f.sub==='Shoes'&&e(Sec,{key:'gs',title:'SIZE',c:e(Pills,{opts:SHOE_SZ,sel:f.size,onSel:v=>up('size',v)})}),
+        f.sub==='Apparel'&&e(Sec,{key:'ga',title:'SIZE',c:e(Pills,{opts:AP_SZ,sel:f.size,onSel:v=>up('size',v)})}),
+        f.sub==='Bag'&&e(Sec,{key:'gb',title:'BAG TYPE',c:e(Pills,{opts:['All','Backpack','Duffel','Sling','Tote'],sel:f.btype,onSel:v=>up('btype',v)})}),
       ],
-      cat==='Apparel'&&[
-        e(Sec,{key:'ag',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
-        e(Sec,{key:'as',title:'SIZE',c:e(Pills,{opts:AP_SZ,sel:f.size,onSel:v=>up('size',v)})}),
-      ],
-      cat==='Bags'&&e(Sec,{key:'bt',title:'BAG TYPE',c:e(Pills,{opts:['All','Backpack','Duffel','Sling','Tote'],sel:f.btype,onSel:v=>up('btype',v)})}),
       e(Sec,{title:'CONDITION',c:e(Pills,{opts:['All','Brand New','Like New','Good','Fair'],sel:f.cond,onSel:v=>up('cond',v)})}),
-      e(Sec,{title:'TYPE',c:e(Pills,{opts:['All','Sale','Trade','Both'],sel:f.type,onSel:v=>up('type',v)})}),
       e(Sec,{title:`MAX PRICE — $${f.maxP}`,c:e('input',{type:'range',min:0,max:300,step:5,value:f.maxP,onChange:ev=>up('maxP',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
       e(Sec,{title:`MAX DISTANCE — ${f.maxD}mi`,c:e('input',{type:'range',min:1,max:200,step:1,value:f.maxD,onChange:ev=>up('maxD',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
     ]),
@@ -1083,12 +1221,12 @@ function FilterPanel({onClose,onApply,filters,cat}){
   ]);
 }
 
-function NotifPanel({onClose,onListing,onMsgs,onTrade,notifs,onMarkRead}){
+function NotifPanel({onClose,onListing,onMsgs,notifs,onMarkRead}){
   const handleTap=(n)=>{
     if(n.unread&&onMarkRead)onMarkRead(n.id);
-    setTimeout(()=>{if(n.type==='wishlist'||n.type==='pricedrop'||n.type==='newlisting'){const l=LS.find(x=>x.id===n.listingId);if(l){onListing(l);onClose();}}else if(n.type==='msg'||n.type==='message'){onMsgs();onClose();}else if(n.type==='trade'){onTrade();onClose();}},150);
+    setTimeout(()=>{if(n.type==='wishlist'||n.type==='pricedrop'||n.type==='newlisting'){const l=LS.find(x=>x.id===n.listingId);if(l){onListing(l);onClose();}}else if(n.type==='msg'||n.type==='message'){onMsgs();onClose();}},150);
   };
-  const colMap={wishlist:C.lm,msg:C.tl,message:C.tl,trade:C.lm,pricedrop:C.am,follow:C.pu,newlisting:C.tl};
+  const colMap={wishlist:C.lm,msg:C.tl,message:C.tl,pricedrop:C.am,follow:C.pu,newlisting:C.tl};
   const unreadCt=notifs.filter(n=>n.unread).length;
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'Notifications'),unreadCt>0&&e('div',{style:{fontSize:9,color:C.lm,marginTop:1}},`${unreadCt} unread`)])]),
@@ -1155,27 +1293,26 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   const [savedSearches,setSavedSearches]=useState(()=>savedSearchesGet());
   const saveSearch=(term)=>{if(!term||!term.trim())return;savedSearchesAdd(term.trim(),{cat,filters});setSavedSearches(savedSearchesGet());showToast&&showToast('Search saved — we\'ll alert you on new matches');};
   const delSearch=(id)=>{savedSearchesDel(id);setSavedSearches(savedSearchesGet());};
-  const cMap={'Paddles':'paddle','Shoes':'shoes','Bags':'bag','Apparel':'apparel','Accessories':'accessories'};
+  const cMap={'Paddles':'paddle','Gear':'gear'};
   const fc=filterCount(filters);
-  const cats=['All','Paddles','Shoes','Bags','Apparel','Accessories'];
+  const cats=['Paddles','Gear','All'];
   const catCount=(c)=>c==='All'?LS.length:LS.filter(l=>l.cat===cMap[c]).length;
   let R=[...LS];
   if(locMode==='local')R=R.filter(l=>l.dist<=filters.maxD);
-  if(q){const lq=q.toLowerCase();R=R.filter(l=>[l.brand,l.model,l.desc,l.loc,CL[l.cat],(gU(l.sid)||{}).name].filter(Boolean).join(' ').toLowerCase().includes(lq));}
+  if(q){const lq=q.toLowerCase();R=R.filter(l=>[l.brand,l.model,l.desc,l.loc,l.sub,CL[l.cat],(gU(l.sid)||{}).name].filter(Boolean).join(' ').toLowerCase().includes(lq));}
   if(cat!=='All')R=R.filter(l=>l.cat===cMap[cat]);
   if(filters.brands.length)R=R.filter(l=>filters.brands.includes(l.brand));
   if(filters.cond!=='All'){const cM={'Brand New':10,'Like New':9,'Good':7,'Fair':5};R=R.filter(l=>l.cond>=(cM[filters.cond]||0));}
-  if(filters.type==='Sale')R=R.filter(l=>l.type==='sale'||l.type==='both');
-  else if(filters.type==='Trade')R=R.filter(l=>l.type==='trade'||l.type==='both');
-  R=R.filter(l=>l.type==='trade'||l.price<=filters.maxP);
+  R=R.filter(l=>l.price<=filters.maxP);
   if(filters.core!=='All')R=R.filter(l=>l.cat!=='paddle'||l.core===filters.core);
   if(filters.face!=='All')R=R.filter(l=>l.cat!=='paddle'||l.face===filters.face);
   if(filters.shape!=='All')R=R.filter(l=>l.cat!=='paddle'||l.shape===filters.shape);
   if(filters.weight!=='All')R=R.filter(l=>l.cat!=='paddle'||wtClass(l.wt)===filters.weight);
   if(filters.thk!=='All')R=R.filter(l=>l.cat!=='paddle'||l.thk===filters.thk);
-  if(filters.gender&&filters.gender!=='All')R=R.filter(l=>(l.cat!=='shoes'&&l.cat!=='apparel')||l.gender===filters.gender||l.gender==='Unisex');
-  if(filters.size&&filters.size!=='All')R=R.filter(l=>(l.cat!=='shoes'&&l.cat!=='apparel')||String(l.sz)===String(filters.size));
-  if(filters.btype&&filters.btype!=='All')R=R.filter(l=>l.cat!=='bag'||l.btype===filters.btype);
+  if(filters.sub&&filters.sub!=='All')R=R.filter(l=>l.cat!=='gear'||l.sub===filters.sub);
+  if(filters.gender&&filters.gender!=='All')R=R.filter(l=>l.cat!=='gear'||!l.gender||l.gender===filters.gender||l.gender==='Unisex');
+  if(filters.size&&filters.size!=='All')R=R.filter(l=>l.cat!=='gear'||!l.sz||String(l.sz)===String(filters.size));
+  if(filters.btype&&filters.btype!=='All')R=R.filter(l=>l.cat!=='gear'||!l.btype||l.btype===filters.btype);
   if(sort==='dist')R.sort((a,b)=>a.dist-b.dist);
   else if(sort==='price')R.sort((a,b)=>a.price-b.price);
   else if(sort==='new')R.sort((a,b)=>b.id-a.id);
@@ -1198,10 +1335,10 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
     ]),
     e('div',{key:'rh',style:{padding:'8px 14px',display:'flex',justifyContent:'space-between'}},[e('span',{style:{fontSize:11,color:C.mt}},`${R.length} items found`),fc>0&&e('span',{style:{fontSize:10,color:C.lm,cursor:'pointer'},onClick:()=>setFilters({...initFilters})},'Clear filters')]),
     viewMode==='map'&&R.length>0?e(LocalMap,{key:'map',listings:R,onView}):
-    R.length===0?e('div',{key:'es',style:{padding:'40px 20px',textAlign:'center'}},[e('div',{style:{marginBottom:11,display:'flex',justifyContent:'center'}},[e(Ic,{n:'search',s:40,c:C.mt+'66',sw:1.25})]),e('div',{style:{fontSize:14,fontWeight:800,color:C.tx,marginBottom:5}},'No matches found'),e('div',{style:{fontSize:11,color:C.mt,marginBottom:14}},'Try broadening your search'),e('button',{onClick:()=>setFilters({...initFilters}),style:{padding:'9px 20px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'Clear filters')]):e('div',{className:'stagger',style:{padding:'0 14px 16px',display:'flex',flexDirection:'column',gap:9}},R.map(l=>{const u=gU(l.sid);const isTr=l.type==='trade';const isSv=saved.includes(l.id);return e('div',{key:l.id,onClick:()=>onView(l),'data-press':'1',style:{background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:10,cursor:'pointer',display:'flex',gap:11,alignItems:'center',boxShadow:'var(--sh-1)'}},[
-      e('div',{style:{width:60,height:60,background:C.sf,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:38}):e(Ic,{n:CAT_ICON[l.cat],s:26,c:C.mt+'90',sw:1.5}),l.tag&&e('div',{style:{position:'absolute',top:-3,left:-3}},[e(TP,{t:l.tag})])]),
+    R.length===0?e('div',{key:'es',style:{padding:'40px 20px',textAlign:'center'}},[e('div',{style:{marginBottom:11,display:'flex',justifyContent:'center'}},[e(Ic,{n:'search',s:40,c:C.mt+'66',sw:1.25})]),e('div',{style:{fontSize:14,fontWeight:800,color:C.tx,marginBottom:5}},'No matches found'),e('div',{style:{fontSize:11,color:C.mt,marginBottom:14}},'Try broadening your search'),e('button',{onClick:()=>setFilters({...initFilters}),style:{padding:'9px 20px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'Clear filters')]):e('div',{className:'stagger',style:{padding:'0 14px 16px',display:'flex',flexDirection:'column',gap:9}},R.map(l=>{const u=gU(l.sid);const isSv=saved.includes(l.id);return e('div',{key:l.id,onClick:()=>onView(l),'data-press':'1',style:{background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:10,cursor:'pointer',display:'flex',gap:11,alignItems:'center',boxShadow:'var(--sh-1)'}},[
+      e('div',{style:{width:60,height:60,background:C.sf,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:38}):e(Ic,{n:listIcon(l),s:26,c:C.mt+'90',sw:1.5}),l.tag&&e('div',{style:{position:'absolute',top:-3,left:-3}},[e(TP,{t:l.tag})])]),
       e('div',{style:{flex:1,minWidth:0}},[
-        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}},[e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},l.model)]),isTr?e('span',{style:{fontSize:10,fontWeight:800,color:C.tl,background:C.tl+'20',borderRadius:7,padding:'3px 8px',border:`1px solid ${C.tl}40`,flexShrink:0,marginLeft:8,display:'inline-flex',alignItems:'center',gap:3}},[e(Ic,{key:'i',n:'swap',s:10,sw:2}),' TRADE']):e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,flexShrink:0,marginLeft:8,letterSpacing:'-0.02em'}},`$${l.price}`)]),
+        e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}},[e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},l.brand),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},l.model)]),e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,flexShrink:0,marginLeft:8,letterSpacing:'-0.02em'}},`$${l.price}`)]),
         e('div',{style:{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},'·'),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},u.name.split(' ')[0]),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),l.ago.includes('h')&&e(IcTxt,{n:'clock',s:9,style:{marginLeft:'auto',fontSize:9,color:C.lm,fontWeight:700}},l.ago)]),
       ]),
       e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{width:30,height:30,borderRadius:'50%',background:isSv?C.lm+'20':C.sf,border:`1px solid ${isSv?C.lm:C.bd}`,color:isSv?C.lm:C.mt,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}},[e(Ic,{n:'heart',s:14,fill:isSv})]),
@@ -1209,25 +1346,6 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
     R.length>0&&hasMore&&e('div',{key:'lm',style:{padding:'0 14px 16px',display:'flex',justifyContent:'center'}},[
       e('button',{onClick:()=>onLoadMore&&onLoadMore(),style:{padding:'10px 22px',borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'Load more ↓'),
     ]),
-  ]);
-}
-
-function MatchOverlay({onClose,onChat}){
-  const [cards,setCards]=useState([...TM]);const [matched,setMatched]=useState(null);
-  const like=()=>{const top=cards[0];setMatched(top);setCards(cs=>cs.slice(1));};
-  const pass=()=>setCards(cs=>cs.slice(1));
-  const Hdr=e('div',{style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),e('div',{style:{flex:1}},[e(IcTxt,{n:'flame',s:15,gap:6,style:{fontSize:14,fontWeight:800,color:C.tx}},'Trade Matches'),e('div',{style:{fontSize:9,color:C.mt}},`${cards.length} mutual matches`)])]);
-  if(matched)return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[Hdr,e('div',{style:{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:20}},[e('div',{style:{marginBottom:12,display:'flex',justifyContent:'center'}},[e(Ic,{n:'trophy',s:44,c:C.ok,sw:1.5})]),e('div',{style:{fontSize:22,fontWeight:900,color:C.ok,marginBottom:5}},"It's a Match!"),e('div',{style:{fontSize:12,color:C.mt,textAlign:'center',marginBottom:20}},`You and ${matched.u.name} want each other's paddles!`),e('button',{onClick:()=>{onClose();onChat&&onChat();},style:{padding:'12px 24px',borderRadius:13,background:C.cta,border:'none',cursor:'pointer',fontSize:14,fontWeight:800,color:'#fff'}},e(IcTxt,{n:'message',s:15,gap:7},'Start Chat'))])]);
-  if(cards.length===0)return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[Hdr,e('div',{style:{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}},[e(Ic,{n:'paddle',s:44,c:C.mt+'70',sw:1.25}),e('div',{style:{fontSize:18,fontWeight:900,color:C.tx,marginTop:12}},'No More Matches')])]);
-  const top=cards[0];
-  return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[Hdr,
-    e('div',{style:{flex:1,padding:14,display:'flex',alignItems:'center',justifyContent:'center'}},[
-      e('div',{style:{background:C.cd,borderRadius:18,border:`2px solid ${C.bd}`,overflow:'hidden',width:'100%'}},[
-        e('div',{style:{padding:'12px 13px',display:'flex',alignItems:'center',gap:9,borderBottom:`1px solid ${C.dm}`}},[e(Av,{u:top.u,sz:38}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:700,color:C.tx}},top.u.name),e('div',{style:{fontSize:9,color:C.mt,display:'flex',gap:7}},[e(IcTxt,{key:'a',n:'paddle',s:9},top.u.skill),e(IcTxt,{key:'b',n:'pin',s:9},`${top.dist}mi`)])]),e('div',{style:{textAlign:'center'}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`${top.compat}%`),e('div',{style:{fontSize:9,color:C.mt}},'match')])]),
-        e('div',{style:{display:'grid',gridTemplateColumns:'1fr auto 1fr'}},[e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5}},[e('div',{style:{fontSize:9,color:C.mt,letterSpacing:1}},'YOU HAVE'),e(PSv,{col:ccol(top.yh.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},top.yh.brand),e('div',{style:{fontSize:10,color:C.tx}},top.yh.model)]),e('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',color:C.lm}},[e(Ic,{n:'swap',s:18})]),e('div',{style:{padding:'12px 8px',textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:5,background:C.sf}},[e('div',{style:{fontSize:9,color:C.mt,letterSpacing:1}},'THEY HAVE'),e(PSv,{col:ccol(top.th.cond)+'70',sz:36}),e('div',{style:{fontSize:9,color:C.tl,fontWeight:800}},top.th.brand),e('div',{style:{fontSize:10,color:C.tx}},top.th.model)])]),
-      ]),
-    ]),
-    e('div',{style:{padding:'11px 24px',display:'flex',gap:18,justifyContent:'center',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:pass,style:{width:50,height:50,borderRadius:'50%',background:C.cd,border:`2px solid ${C.rd}`,cursor:'pointer',color:C.rd,display:'flex',alignItems:'center',justifyContent:'center'}},[e(Ic,{n:'close',s:18,sw:2.25})]),e('button',{onClick:like,style:{width:50,height:50,borderRadius:'50%',background:C.ok+'20',border:`2px solid ${C.ok}`,cursor:'pointer',color:C.ok,display:'flex',alignItems:'center',justifyContent:'center'}},[e(Ic,{n:'heart',s:18,fill:true})])]),
   ]);
 }
 
@@ -1401,7 +1519,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       counterFor&&e(CounterOfferModal,{key:'co',m:counterFor,onClose:()=>setCounterFor(null),onSubmit:sendCounter}),
       meetupOpen&&e(MeetupModal,{key:'mu',seller:th.wu,onClose:()=>setMeetupOpen(false),onConfirm:sendMeetup}),
       disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref,amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:(reason,detail)=>{setDisputeOpen(false);showToast&&showToast('Dispute filed — our team will follow up within 24h');}}),
-      e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.isM?C.lm+'40':th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[th.isM?e(Ic,{n:'flame',s:17,c:C.lm,fill:true,sw:0}):e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[th.isM?e('div',{style:{fontSize:9,color:C.lm,fontWeight:700}},'TRADE MATCH'):e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.isT?`${th.ref.b} ${th.ref.m} · trade`:th.ref.m)]),th.dealStatus==='accepted'&&e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'ACCEPTED')]),
+      e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.m)]),th.dealStatus==='accepted'&&e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[
         ...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer,onDecline:declineOffer,onCounter:setCounterFor})),
         theyTyping&&e('div',{key:'typ',style:{display:'flex',justifyContent:'flex-start'}},[e('div',{style:{padding:'8px 13px',borderRadius:13,borderBottomLeftRadius:2,background:C.cd,display:'flex',gap:3,alignItems:'center'}},[
@@ -1435,8 +1553,8 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       e('div',{style:{fontSize:14,fontWeight:800,color:C.tx}},'No conversations yet'),
       e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5}},'Reach out to a seller on any listing to start a conversation.'),
     ]):e('div',{key:'l',className:'stagger'},msgs.map((th,idx)=>e('div',{key:th.id,onClick:()=>setActiveIdx(idx),'data-press':'1',style:{padding:'11px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:10,background:th.unread>0?C.lm+'08':'transparent'}},[
-      e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900,color:'#fff'}},th.unread),th.isM&&e('div',{style:{position:'absolute',bottom:-2,right:-2,width:15,height:15,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',border:`1.5px solid ${C.bg}`,color:'#fff'}},[e(Ic,{n:'flame',s:9,fill:true,c:'#fff',sw:0})])]),
-      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.ok:C.lm,fontWeight:700,marginBottom:2,display:'flex',alignItems:'center',gap:4}},[th.dealStatus==='accepted'&&e('span',{style:{background:C.ok+'18',color:C.ok,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'DEAL'),th.isM&&e('span',{style:{background:C.lm+'18',color:C.lm,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'TRADE'),e('span',{style:{color:C.mt,fontWeight:500}},`${th.ref.b} ${th.ref.m}`)]),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},th.last)]),
+      e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900,color:'#fff'}},th.unread),null]),
+      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.ok:C.lm,fontWeight:700,marginBottom:2,display:'flex',alignItems:'center',gap:4}},[th.dealStatus==='accepted'&&e('span',{style:{background:C.ok+'18',color:C.ok,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'DEAL'),e('span',{style:{color:C.mt,fontWeight:500}},`${th.ref.b} ${th.ref.m}`)]),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},th.last)]),
     ]))),
   ]);
 }
@@ -1447,7 +1565,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   const [cond,setCond]=useState('Like New');
   const [maxP,setMaxP]=useState('');
   const [busy,setBusy]=useState(false);
-  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson'];
+  const BRANDS=PADDLE_BRANDS;
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
   const valid=brand&&model&&(mode==='wish'||cond);
@@ -1461,7 +1579,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
     e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,animation:'sheetIn var(--dur-3) var(--ease-out)'}},[
       e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},mode==='gear'?'Add Paddle to Gear':'Add to Wishlist'),e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})])]),
       e('div',{key:'br',style:{marginBottom:9}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block'}},'BRAND'),e('select',{value:brand,onChange:ev=>setBrand(ev.target.value),style:IS},[e('option',{key:'_',value:''},'Select brand...'),...BRANDS.map(b=>e('option',{key:b,value:b},b))])]),
-      e('div',{key:'mo',style:{marginBottom:9}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block'}},'MODEL'),e('input',{value:model,onChange:ev=>setModel(ev.target.value),placeholder:'e.g. Vanguard Power Air Invikta',style:IS})]),
+      e('div',{key:'mo',style:{marginBottom:9}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block'}},'MODEL'),e('input',{value:model,onChange:ev=>setModel(ev.target.value),placeholder:'e.g. Vanguard Power Air Invikta',list:'pdb-models-wish',style:IS}),e('datalist',{id:'pdb-models-wish'},(brand?pdbModels(brand):[]).map(m=>e('option',{key:m,value:m})))]),
       mode==='gear'?e('div',{key:'co',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block'}},'CONDITION'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>setCond(cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${cond===cc?C.lm:C.bd}`,background:cond===cc?C.lm+'20':'transparent',color:cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc)))])
         :e('div',{key:'mp',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block'}},'MAX BUDGET (OPTIONAL)'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.tl,fontWeight:800,fontSize:14}},'$'),e('input',{value:maxP,onChange:ev=>setMaxP(ev.target.value),type:'number',placeholder:'200',style:{...IS,paddingLeft:24}})])]),
       e('button',{key:'go',onClick:submit,disabled:!valid||busy,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy)?(mode==='gear'?C.cta:C.lm):C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},busy?'Adding...':mode==='gear'?'Add to Gear':'Add to Wishlist'),
@@ -1469,7 +1587,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
+function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
@@ -1544,7 +1662,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
       const {data:gRows}=await sb.from('gear').select('*').eq('user_id',me.id).order('created_at',{ascending:false});
       if(mounted&&gRows&&gRows.length>0){
         setGear(gRows.map(g=>{
-          const ws=[];if(g.for_sale)ws.push('sell');if(g.for_trade)ws.push('trade');
+          const ws=[];if(g.for_sale)ws.push('sell');
           return{id:g.id,brand:g.brand,model:g.model,cond:g.condition,w:ws,p:g.asking_price==null?null:Number(g.asking_price)};
         }));
       }
@@ -1561,7 +1679,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
     const next=g.w.includes(w)?g.w.filter(y=>y!==w):[...g.w,w];
     setGear(gs=>gs.map(x=>x.id!==gid?x:{...x,w:next}));
     if(typeof gid==='string'&&me?.id){
-      await sb.from('gear').update({for_sale:next.includes('sell'),for_trade:next.includes('trade')}).eq('id',gid).eq('user_id',me.id);
+      await sb.from('gear').update({for_sale:next.includes('sell')}).eq('id',gid).eq('user_id',me.id);
     }
   };
   const addGear=async(brand,model,cond)=>{
@@ -1588,11 +1706,10 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
 
   const MY_LS=[
     {id:901,cat:'paddle',brand:'Head',model:'Radical Elite',price:60,orig:100,cond:7,sid:0,type:'sale',dist:0,saves:3,views:28,ago:'1w',loc:'Maryville',desc:'Great starter/backup.',grip:'4 1/4"',active:true},
-    {id:902,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'both',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
+    {id:902,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'sale',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
   ];
-  MY_LS.forEach(l=>{const d=pdbGet(l.brand,l.model);if(d)Object.assign(l,d);const ov=localOverrides[l.id];if(ov)Object.assign(l,ov);if(ov&&ov.sold)l.active=false;});
+  MY_LS.forEach(l=>{const d=pdbFind(l.brand,l.model);if(d)Object.assign(l,d);const ov=localOverrides[l.id];if(ov)Object.assign(l,ov);if(ov&&ov.sold)l.active=false;});
   MY_LS.sort((a,b)=>((b.bumped||0)-(a.bumped||0)));
-  const tradeReady=gear.filter(g=>g.w.includes('trade')).length>0&&wish.length>0;
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
   const priceDrop=saved.filter(id=>{
@@ -1668,15 +1785,6 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         e(Ic,{n:'shieldCheck',s:15,c:C.ok}),
         e('span',{style:{fontSize:11,fontWeight:800,color:C.ok}},'Verified seller — phone confirmed'),
       ]),
-      // Trade matches (only when ready)
-      tradeReady&&e('div',{key:'tm',onClick:onOpenMatches,style:{background:`linear-gradient(135deg,${C.lm}12,${C.tl}08)`,borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.lm}25`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
-        e(Ic,{n:'flame',s:20,c:C.lm,fill:true,sw:0}),
-        e('div',{style:{flex:1}},[
-          e('div',{style:{fontSize:12,fontWeight:800,color:C.lm}},`${TM.length} Trade Matches`),
-          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Players who want yours & have what you want'),
-        ]),
-        e(Ic,{n:'chevron',s:15,c:C.lm}),
-      ]),
       // Bottom stats: Active Listings | Saved
       e('div',{key:'st',style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},[
         e('button',{onClick:()=>setTab('listings'),style:{background:C.cd,borderRadius:9,padding:'8px 5px',textAlign:'center',border:`1px solid ${C.bd}`,cursor:'pointer'}},[
@@ -1697,11 +1805,11 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         gear.length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.bd}`,marginBottom:10}},[
           e('div',{style:{marginBottom:8,display:'flex',justifyContent:'center'}},[e(Ic,{n:'paddle',s:34,c:C.mt+'70',sw:1.25})]),
           e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,marginBottom:4}},'Build your paddle collection'),
-          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto',lineHeight:1.5}},'Add paddles you own to unlock trade matches and track their value.'),
+          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto',lineHeight:1.5}},'Add paddles you own to track their value and list them in one tap.'),
         ]),
         gear.map(g=>e('div',{key:g.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:11,marginBottom:9}},[
           e('div',{style:{display:'flex',alignItems:'center',gap:9,marginBottom:9}},[e(PSv,{col:ccol(g.cond)+'60',sz:34}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},g.brand),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx}},g.model),e(CB,{c:g.cond})]),g.p&&e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${g.p}`)]),
-          e('div',{style:{display:'flex',gap:6}},[e('button',{onClick:()=>togW(g.id,'sell'),style:{flex:1,padding:'5px 0',borderRadius:8,border:`1px solid ${g.w.includes('sell')?C.lm:C.dm}`,background:g.w.includes('sell')?C.lm+'20':'transparent',color:g.w.includes('sell')?C.lm:C.mt,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'tag',s:12}),g.w.includes('sell')?'For Sale':'Sell?']),e('button',{onClick:()=>togW(g.id,'trade'),style:{flex:1,padding:'5px 0',borderRadius:8,border:`1px solid ${g.w.includes('trade')?C.tl:C.dm}`,background:g.w.includes('trade')?C.tl+'20':'transparent',color:g.w.includes('trade')?C.tl:C.mt,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'swap',s:12}),g.w.includes('trade')?'Trading':'Trade?'])]),
+          e('div',{style:{display:'flex',gap:6}},[e('button',{onClick:()=>togW(g.id,'sell'),style:{flex:1,padding:'5px 0',borderRadius:8,border:`1px solid ${g.w.includes('sell')?C.lm:C.dm}`,background:g.w.includes('sell')?C.lm+'20':'transparent',color:g.w.includes('sell')?C.lm:C.mt,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'tag',s:12}),g.w.includes('sell')?'Listed For Sale':'Mark For Sale'])]),
         ])),
         e('button',{onClick:()=>setShowAddGear(true),style:{width:'100%',marginTop:6,padding:'12px 0',borderRadius:11,border:'none',background:C.lm,color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer'}},'+ Add Paddle to Gear'),
       ]),
@@ -1747,7 +1855,7 @@ function ProfileTab({onView,saved,onOpenMatches,onOpenSaved,onOpenSettings,me,sa
         MY_LS.filter(l=>l.active).length===0&&e('div',{style:{padding:'24px 14px',textAlign:'center',background:C.cd,borderRadius:12,border:`1px dashed ${C.bd}`,marginBottom:10}},[
           e('div',{style:{marginBottom:8,display:'flex',justifyContent:'center'}},[e(Ic,{n:'package',s:34,c:C.mt+'70',sw:1.25})]),
           e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,marginBottom:4}},'No active listings'),
-          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto 10px',lineHeight:1.5}},'List your unused paddles to earn money or trade for new ones.'),
+          e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto 10px',lineHeight:1.5}},'List the paddles you no longer play with and turn them into cash.'),
           e('button',{onClick:onCreate,style:{padding:'8px 16px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'+ Post a Listing'),
         ]),
         MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${bulkSel.includes(l.id)?C.lm:C.lm+'40'}`,padding:9,marginBottom:8,opacity:l.paused?.6:1}},[
@@ -1841,13 +1949,13 @@ function ActivityFeed({items,onView,emptyMsg}){
     e(Av,{key:'a',u:a.u,sz:34}),
     e('div',{key:'i',style:{flex:1,minWidth:0}},[
       e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.35}},[e('span',{style:{fontWeight:800}},a.u.name.split(' ')[0]),e('span',{style:{color:C.mt}},' listed '),e('span',{style:{fontWeight:700}},`${a.L.brand} ${a.L.model}`)]),
-      e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},e(IcTxt,{n:'pin',s:9},`${a.L.type==='trade'?'Trade':'$'+a.L.price} · ${a.L.dist}mi · ${a.ago} ago`)),
+      e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},e(IcTxt,{n:'pin',s:9},`$${a.L.price} · ${a.L.dist}mi · ${a.ago} ago`)),
     ]),
     e(Ic,{key:'g',n:'chevron',s:14,c:C.mt}),
   ])));}
 
 function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}){
-  const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',willTrade:false,negotiable:true,saleType:'fixed',auctionDays:3}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',willTrade:false,negotiable:true,saleType:'fixed',auctionDays:3});
+  const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',sub:prefill.sub||'Shoes',negotiable:true,saleType:'fixed',auctionDays:3}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',sub:'Shoes',negotiable:true,saleType:'fixed',auctionDays:3});
   const [busy,setBusy]=useState(false);
   const [photos,setPhotos]=useState([]); // [{file, preview}]
   const fileRef=useRef(null);
@@ -1865,13 +1973,15 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
     setPhotos(ps=>[...ps,...next].slice(0,6));
   };
   const removePhoto=(idx)=>setPhotos(ps=>{URL.revokeObjectURL(ps[idx].preview);return ps.filter((_,i)=>i!==idx);});
-  const CATS2=[{k:'paddle',l:'Paddle',ic:'paddle'},{k:'shoes',l:'Shoes',ic:'shoe'},{k:'bag',l:'Bag',ic:'bag'},{k:'apparel',l:'Apparel',ic:'shirt'},{k:'accessories',l:'Accessory',ic:'bolt'}];
-  const BRANDS=['Selkirk','JOOLA','Engage','Franklin','Paddletek','Head','Onix','CRBN','Six Zero','Gamma','Gearbox','ProKennex','Diadem','Vulcan','Wilson','Other'];
+  const CATS2=[{k:'paddle',l:'Paddle',ic:'paddle'},{k:'gear',l:'Gear',ic:'bag'}];
+  // Paddle brands track the DB; gear keeps its own footwear/apparel list.
+  const BRANDS=(f.cat==='paddle'?[...PADDLE_BRANDS]:[...GEAR_BRANDS]).concat('Other');
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
   const LS={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
   const valid=f.brand&&f.model&&f.price&&f.desc&&photos.length>0;
-  const pdata=f.cat==='paddle'?pdbGet(f.brand,f.model):null;
+  const pdata=f.cat==='paddle'?pdbFind(f.brand,f.model):null;
+  const modelOpts=f.cat==='paddle'&&f.brand?pdbModels(f.brand):[];
   const handlePost=async()=>{
     if(!valid||busy)return;
     setBusy(true);
@@ -1887,6 +1997,7 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'close',s:18,sw:2})]),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'List Your Item'),e(IcTxt,{n:'pin',s:10,style:{fontSize:9,color:C.lm,marginTop:1}},'Maryville · 25mi visibility')])]),
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14,display:'flex',flexDirection:'column',gap:13}},[
       e('div',null,[e('label',{style:LS},'CATEGORY'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},CATS2.map(cc=>e('button',{key:cc.k,onClick:()=>up('cat',cc.k),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.cat===cc.k?C.lm:C.bd}`,background:f.cat===cc.k?C.lm+'20':C.cd,color:f.cat===cc.k?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:cc.ic,s:14}),cc.l])))]),
+      f.cat==='gear'&&e('div',null,[e('label',{style:LS},'GEAR TYPE'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},GEAR_SUBS.map(gs=>e('button',{key:gs,onClick:()=>up('sub',gs),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.sub===gs?C.lm:C.bd}`,background:f.sub===gs?C.lm+'20':C.cd,color:f.sub===gs?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:GEAR_SUB_ICON[gs],s:14}),gs])))]),
       e('div',null,[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
           e('label',{style:{...LS,marginBottom:0}},`PHOTOS · ${photos.length}/6 ${photos.length===0?'(required)':''}`),
@@ -1908,7 +2019,12 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
         photos.length>0&&photos.length<3&&e('div',{style:{fontSize:9,color:C.mt,marginTop:5,lineHeight:1.4}},'Listings with 3+ photos sell 2× faster. Show the face, edge, and any wear.'),
       ]),
       e('div',null,[e('label',{style:LS},'BRAND'),e('select',{value:f.brand,onChange:ev=>up('brand',ev.target.value),style:IS},[e('option',{value:''},'Select brand...'),...BRANDS.map(b=>e('option',{key:b,value:b},b))])]),
-      e('div',null,[e('label',{style:LS},f.cat==='paddle'?'PADDLE MODEL':'MODEL / NAME'),e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:'Item name...',style:IS})]),
+      e('div',null,[
+        e('label',{style:LS},f.cat==='paddle'?'PADDLE MODEL':'MODEL / NAME'),
+        e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:f.cat==='paddle'?'Start typing — we\'ll match our paddle database':'Item name...',list:modelOpts.length?'pdb-models':undefined,style:IS}),
+        modelOpts.length>0&&e('datalist',{id:'pdb-models'},modelOpts.map(m=>e('option',{key:m,value:m}))),
+        f.cat==='paddle'&&f.model&&!pdata&&e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'Not in our paddle database yet — your listing still posts, specs just won\'t auto-fill.'),
+      ]),
       pdata&&e('div',{style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5}},'FOUND IN PADDLE DATABASE'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[['Core',pdata.core],['Face',pdata.face],['Shape',pdata.shape],['Thick',pdata.thk],['Weight',pdata.wt]].map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`)))]),
       e('div',null,[e('label',{style:LS},'LISTING TYPE'),e('div',{style:{display:'flex',gap:6}},[
         e('button',{key:'fx',onClick:()=>up('saleType','fixed'),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${f.saleType!=='auction'?C.lm:C.bd}`,background:f.saleType!=='auction'?C.lm+'15':'transparent',color:f.saleType!=='auction'?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},e(IcTxt,{n:'tag',s:12},'Fixed price')),
@@ -1929,7 +2045,6 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
         e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>up('cond',cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${f.cond===cc?C.lm:C.bd}`,background:f.cond===cc?C.lm+'20':'transparent',color:f.cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc))),
       ]),
       e('div',null,[e('label',{style:LS},'DESCRIPTION'),e('textarea',{value:f.desc,onChange:ev=>up('desc',ev.target.value),placeholder:"Describe condition, why selling, preferred meet-up...",rows:3,style:{...IS,resize:'vertical',lineHeight:1.5}})]),
-      f.cat==='paddle'&&e('div',{style:{background:C.tl+'10',borderRadius:10,padding:11,border:`1px solid ${C.tl}25`,display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',null,[e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Open to trades?'),e('div',{style:{fontSize:9,color:C.mt}},'Surfaces this in trade matches')]),e('button',{onClick:()=>up('willTrade',!f.willTrade),style:{width:42,height:22,borderRadius:11,background:f.willTrade?C.tl:C.dm,border:'none',cursor:'pointer',position:'relative'}},[e('div',{style:{width:16,height:16,borderRadius:'50%',background:'#fff',position:'absolute',top:3,left:f.willTrade?23:3,transition:'left .2s'}})])]),
     ]),
     e('div',{key:'f',style:{padding:'11px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:handlePost,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy)?C.lm:C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},busy?'Posting...':valid?'Post Listing':photos.length===0?'Add at least 1 photo':'Fill required fields')]),
   ]);
@@ -2001,16 +2116,15 @@ function AuthScreen({onSignedIn}){
   ]);
   return e('div',{style:{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',padding:'0 22px',background:C.bg}},[
     e('div',{key:'lg',style:{textAlign:'center',marginBottom:20}},[
-      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'paddle',s:34,c:C.lm,sw:1.75})]),
       e('div',{style:{fontSize:23,fontWeight:800,color:C.lm,letterSpacing:'-0.035em'}},'DINK EXCHANGE'),
-      e('div',{style:{fontSize:11,color:C.mt,marginTop:4}},mode==='signin'?'Welcome back':'Buy, sell & trade pickleball gear locally'),
+      e('div',{style:{fontSize:11,color:C.mt,marginTop:4}},mode==='signin'?'Welcome back':'Buy & sell pickleball paddles locally'),
     ]),
     mode==='signup'&&e('div',{key:'vp',style:{background:C.lm+'08',borderRadius:12,padding:'10px 12px',marginBottom:16,border:`1px solid ${C.lm}20`}},[
       e('div',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5,marginBottom:6}},'WHY DINK EXCHANGE'),
       e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.5}},e('span',{style:{display:'flex',flexDirection:'column',gap:5}},[
         e(IcTxt,{key:'a',n:'pin',s:12,c:C.lm},'Find paddles near you'),
-        e(IcTxt,{key:'b',n:'swap',s:12,c:C.lm},'Trade with other players'),
-        e(IcTxt,{key:'c',n:'chart',s:12,c:C.lm},'Fair price intel built in'),
+        e(IcTxt,{key:'b',n:'tag',s:12,c:C.lm},'Sell the paddles you\'ve moved on from'),
+        e(IcTxt,{key:'c',n:'chart',s:12,c:C.lm},`Real specs + price intel on ${PDB_COUNT}+ paddles`),
       ])),
     ]),
     e('button',{key:'gg',onClick:googleSignIn,disabled:busy,style:{width:'100%',padding:'12px 0',borderRadius:11,background:'#fff',border:`1px solid ${C.bd}`,cursor:busy?'default':'pointer',fontSize:13,fontWeight:700,color:C.tx,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',gap:9}},[
@@ -2041,7 +2155,6 @@ function LoadingScreen(){
   useEffect(()=>{const t=setTimeout(()=>setSlow(true),4000);return()=>clearTimeout(t);},[]);
   return e('div',{style:{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg}},[
     e('div',{style:{textAlign:'center',padding:'0 24px'}},[
-      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'paddle',s:34,c:C.lm,sw:1.75})]),
       e('div',{style:{fontSize:11,color:C.mt,marginBottom:slow?12:0}},'Loading...'),
       slow&&e('div',{style:{fontSize:10,color:C.mt,lineHeight:1.6,maxWidth:240,margin:'0 auto'}},'Taking longer than usual. Check your connection, then try a hard refresh (Cmd+Shift+R / Ctrl+Shift+R).'),
     ]),
@@ -2138,7 +2251,7 @@ function OnboardingBanner({step,onComplete,onSkip,onOpenSettings,onOpenGear}){
   const steps=[
     {ic:'pin',t:'Set your location',d:'Helps us show listings near you',cta:'Set Location',action:onOpenSettings},
     {ic:'paddle',t:'Add your skill level',d:'Find players at your level',cta:'Set Skill',action:onOpenSettings},
-    {ic:'bag',t:'Add a paddle to your gear',d:'Unlock trade matches',cta:'Add Gear',action:onOpenGear},
+    {ic:'bag',t:'Add a paddle to your gear',d:'Track its value and list it fast',cta:'Add Gear',action:onOpenGear},
   ];
   const s=steps[step]||steps[0];
   return e('div',{style:{margin:'10px 14px 0',background:`linear-gradient(135deg,${C.lm}15,${C.tl}10)`,borderRadius:13,padding:'12px 13px',border:`1px solid ${C.lm}30`,display:'flex',alignItems:'center',gap:11}},[
@@ -2439,7 +2552,7 @@ function PlayersNearby({me,onOpenSeller}){
     .slice(0,8);
   if(players.length===0)return e('div',{style:{fontSize:11,color:C.mt,padding:'14px 0',textAlign:'center'}},'No players nearby yet.');
   return e('div',null,[
-    e('div',{key:'i',style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.4}},`Players within 30mi near your DUPR ${mySkill.toFixed(1)} — connect to rally or trade.`),
+    e('div',{key:'i',style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.4}},`Players within 30mi near your DUPR ${mySkill.toFixed(1)} — connect to rally or buy and sell.`),
     e('div',{key:'l',className:'stagger',style:{display:'flex',flexDirection:'column',gap:7}},players.map(({u,skillDiff})=>e('div',{key:u.id,onClick:()=>onOpenSeller&&onOpenSeller(u),'data-press':'1',style:{display:'flex',alignItems:'center',gap:10,padding:'9px 11px',borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,cursor:'pointer'}},[
       e(Av,{u,sz:38}),
       e('div',{style:{flex:1,minWidth:0}},[
@@ -2473,7 +2586,7 @@ function LocalMap({listings,onView}){
         e('circle',{key:'me',cx,cy,r:6,fill:C.lm}),
         e('text',{key:'met',x:cx,y:cy-9,fontSize:8,fill:C.lm,textAnchor:'middle',fontWeight:'bold'},'You'),
         ...plot.map(({l,x,y})=>e('g',{key:l.id,style:{cursor:'pointer'},onClick:()=>setSel(l)},[
-          e('circle',{cx:x,cy:y,r:sel&&sel.id===l.id?8:6,fill:l.type==='trade'?C.tl:C.am,stroke:C.bg,strokeWidth:2}),
+          e('circle',{cx:x,cy:y,r:sel&&sel.id===l.id?8:6,fill:C.am,stroke:C.bg,strokeWidth:2}),
           e('circle',{cx:x,cy:y,r:2,fill:'#fff'}),
         ])),
       ]),
@@ -2481,7 +2594,7 @@ function LocalMap({listings,onView}){
     sel&&e('div',{key:'sel',onClick:()=>onView&&onView(sel),style:{marginTop:10,background:C.cd,borderRadius:12,border:`1px solid ${C.lm}40`,padding:10,display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[
       e(PSv,{col:ccol(sel.cond)+'70',sz:30}),
       e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},sel.brand),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},sel.model),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${sel.dist}mi · ${sel.loc}`)]),
-      sel.type!=='trade'?e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`$${sel.price}`):e('div',{style:{fontSize:11,fontWeight:700,color:C.tl}},'Trade'),
+      e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`$${sel.price}`),
     ]),
     !sel&&e('div',{key:'hint',style:{marginTop:9,textAlign:'center',fontSize:10,color:C.mt}},`Tap a marker to preview · ${plot.length} listings plotted`),
   ]);
@@ -2618,13 +2731,14 @@ function App(){
   const [crt,setCrt]=useState(false);
   const [crtPrefill,setCrtPrefill]=useState(null); // for relist
   const [pst,setPst]=useState(false);
-  const [matchOpen,setMatchOpen]=useState(false);
   const [notifOpen,setNotifOpen]=useState(false);
   const [savedOpen,setSavedOpen]=useState(false);
   const [settingsOpen,setSettingsOpen]=useState(false);
   const [offerOpen,setOfferOpen]=useState(null);
   const [locMode,setLocMode]=useState(()=>kv.get('locMode','local'));
-  const [marketCat,setMarketCat]=useState(()=>kv.get('marketCat','All'));
+  // Paddles are the core of the marketplace, so that's the default landing category.
+  // Stale values from the retired Shoes/Bags/Apparel/Accessories tabs map to Gear.
+  const [marketCat,setMarketCat]=useState(()=>{const v=kv.get('marketCat','Paddles');return ['All','Paddles','Gear'].includes(v)?v:'Gear';});
   // Persisted Market filters — hydrated from kv on first render, then re-written by an effect below.
   const [marketFilters,setMarketFilters]=useState(()=>{const stored=kv.get('marketFilters',null);return stored?{...initFilters,...stored}:{...initFilters};});
   const [msgs,setMsgs]=useState([...MSGS_INIT]);
@@ -2665,7 +2779,7 @@ function App(){
   // Keep module-level follow state in sync for LCard / helpers
   useEffect(()=>{FOLLOWING=new Set(following);},[following]);
   useEffect(()=>{FOLLOW_GRAPH[0]=new Set((followers||[]).map(u=>u.id));},[followers]);
-  const [settings,setSettings]=useState({name:ME.name,location:ME.loc,skill:ME.skill,cashapp:ME.cashapp,venmo:ME.venmo,notifWishlist:true,notifPriceDrops:true,notifTrades:true,notifMessages:true,preciseLoc:false,blockedCt:0,darkMode:themeMode==='dark'});
+  const [settings,setSettings]=useState({name:ME.name,location:ME.loc,skill:ME.skill,cashapp:ME.cashapp,venmo:ME.venmo,notifWishlist:true,notifPriceDrops:true,notifMessages:true,preciseLoc:false,blockedCt:0,darkMode:themeMode==='dark'});
   // Sync darkMode toggle <-> themeMode
   useEffect(()=>{const target=settings.darkMode?'dark':'light';if(target!==themeMode)setThemeMode(target);},[settings.darkMode]);
 
@@ -2691,7 +2805,7 @@ function App(){
             name:meObj.name,location:meObj.loc,skill:meObj.skill,
             cashapp:meObj.cashapp,venmo:meObj.venmo,
             notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
-            notifTrades:us.notif_trades,notifMessages:us.notif_messages,
+            notifMessages:us.notif_messages,
             preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
             darkMode:themeMode==='dark',
           });
@@ -2859,7 +2973,7 @@ function App(){
 
   // --- NOTIFICATIONS ---
   const [notifs,setNotifs]=useState([...NOTIFS]);
-  const TYPE_ICONS={wishlist:'flame',message:'message',trade:'swap',pricedrop:'dollar',offer:'dollar',follow:'users',newlisting:'tag'};
+  const TYPE_ICONS={wishlist:'flame',message:'message',pricedrop:'dollar',offer:'dollar',follow:'users',newlisting:'tag'};
   const mapNotif=(n)=>({
     id:n.id,type:n.type,ic:n.icon||TYPE_ICONS[n.type]||'bell',
     title:n.title,msg:n.message,time:timeAgo(n.created_at),
@@ -3126,7 +3240,8 @@ function App(){
       model:safeModel,
       price:safePrice,
       condition:condMap[formData.cond]||7,
-      type:formData.willTrade?'both':'sale',
+      type:'sale',
+      sub:formData.cat==='gear'?formData.sub:null,
       description:safeDesc,
       location:sanitizeText(me.loc||'',80),
       lat:me.lat,lng:me.lng,
@@ -3271,7 +3386,7 @@ function App(){
     return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
   }).length;
   const handleNav=(id)=>{if(id==='sell'){setCrt(true);setView(null);return;}setTab(id);setView(null);if(id==='messages'&&activeMsgIdx===null);};
-  const overlayOpen=crt||matchOpen||notifOpen||savedOpen||settingsOpen||offerOpen;
+  const overlayOpen=crt||notifOpen||savedOpen||settingsOpen||offerOpen;
 
   // --- AUTH GATE ---
   if(authState==='loading'||authState==='in'&&!me){
@@ -3288,7 +3403,7 @@ function App(){
   return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
     e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`var(--sh-4), 0 0 0 1px ${C.bd}`,position:'relative'}},[
       e('div',{key:'sb',style:{height:42,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 18px',borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
-        e('div',{style:{display:'flex',alignItems:'center',gap:6}},[e('span',{style:{display:'inline-flex',alignItems:'center',gap:5,fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},[e(Ic,{key:'i',n:'paddle',s:15,sw:2}),'DINK']),e('span',{style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:6}},[e('span',{style:{fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},'DINK'),e('span',{style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
         e('div',{style:{display:'flex',alignItems:'center',gap:14}},[
           e('button',{onClick:()=>setSavedOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:saved.length>0?C.lm:C.mt,lineHeight:1,display:'flex'}},[e(Ic,{key:'i',n:'heart',s:17,fill:saved.length>0}),saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
           e('button',{onClick:()=>setNotifOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:C.lm,display:'flex'}},[e(Ic,{key:'i',n:'bell',s:17}),notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
@@ -3304,8 +3419,7 @@ function App(){
         verifyOpen&&e(VerificationModal,{key:'vf',onClose:()=>setVerifyOpen(false),onVerified:()=>{setVerified(true);kv.set('verified',true);setVerifyOpen(false);showToast('You are now a Verified seller');}}),
         sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),prefill:crtPrefill}),
-        matchOpen&&e(MatchOverlay,{onClose:()=>setMatchOpen(false),onChat:()=>setTab('messages')}),
-        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),onTrade:()=>setMatchOpen(true),notifs,onMarkRead:markNotifRead}),
+        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
         settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,onTogglePush:async()=>{const p=await pushRequest();const ok=p==='granted';setPushOn(ok);showToast(ok?'Push notifications enabled':'Push permission denied');}}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
@@ -3316,7 +3430,7 @@ function App(){
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Saved — check Market for your saved searches')}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,onOpenReview:(L,seller)=>setReviewFor({L,seller})}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenMatches:()=>setMatchOpen(true),onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
       !overlayOpen&&!view&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
