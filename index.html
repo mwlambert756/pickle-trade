@@ -305,9 +305,41 @@ function safeMoney(n){
 function safeCashapp(s){const t=sanitizeText(s,30);return /^\$?[A-Za-z0-9_]{1,20}$/.test(t)?t:'';}
 function safeVenmo(s){const t=sanitizeText(s,40);return /^@?[A-Za-z0-9_-]{1,30}$/.test(t)?t:'';}
 
+// --- CENTRAL PAYMENTS (placeholder) ------------------------------------------
+// We're moving off "buyer and seller settle it themselves" onto a single
+// in-app rail: the buyer pays DINK at checkout, the seller onboards a connected
+// account and gets paid out after the meet-up is confirmed. None of that is
+// wired up yet — this block is the seam so the UI can already show the shape of
+// it. Flip PAYMENTS.enabled once the checkout + Connect endpoints exist; every
+// "coming soon" state below keys off it.
+const PAYMENTS={
+  enabled:false,
+  provider:'Stripe Connect',
+  brand:'DINK Pay',
+  feePct:0.029,   // buyer-side processing fee, shown in the checkout preview
+  feeFlat:0.30,
+};
+// Buyer-facing breakdown for an accepted deal. Dollars.
+function checkoutQuote(amount){
+  const subtotal=safeMoney(amount)||0;
+  const fee=subtotal>0?Math.round((subtotal*PAYMENTS.feePct+PAYMENTS.feeFlat)*100)/100:0;
+  return {subtotal,fee,total:Math.round((subtotal+fee)*100)/100};
+}
+// TODO(payments): create a PaymentIntent for the deal server-side and return a
+// redirect/confirmation handle for the client.
+async function startCheckout(){throw new Error(`${PAYMENTS.brand} checkout is not wired up yet`);}
+// TODO(payments): create a Connect account link so a seller can onboard.
+async function createPayoutOnboardingLink(){throw new Error(`${PAYMENTS.brand} payouts are not wired up yet`);}
+// Seller payout state. Placeholder until profiles carry a connected-account id
+// plus charges_enabled / payouts_enabled flags.
+function payoutStatus(profile){
+  if(!PAYMENTS.enabled)return{state:'unavailable',label:'Coming soon'};
+  return profile&&profile.payouts_enabled?{state:'active',label:'Active'}:{state:'pending',label:'Not connected'};
+}
+
 const ME={id:0,name:'Alex Rivera',ini:'AR',vfd:true,loc:'Maryville, TN',skill:'3.5',since:'2023',resp:'< 2 hrs',sales:8,bio:'Local pickleball enthusiast, always looking to upgrade my paddle game. Verified seller — fast meet-ups around Maryville. Hit me up if you have any Selkirk or JOOLA carbon paddles!',ac:'#4DA8FF',bdg:['Community Member']};
 // Payment handles intentionally omitted from demo seed data — they are fetched
-// only inside an accepted-deal conversation (see PayoutSheet logic).
+// only inside an accepted-deal conversation (see PaymentSheet logic).
 let US=[
 {id:1,name:'Marcus Webb',ini:'MW',rating:4.9,rev:47,trust:98,vfd:true,loc:'Maryville',dist:1.2,bdg:['Top Seller'],since:'2022',resp:'< 1 hr',sales:34,ac:'#14B8A6',skill:'4.0',lastActive:'5m ago'},
 {id:2,name:'Sarah Chen',ini:'SC',rating:4.8,rev:32,trust:95,vfd:true,loc:'Knoxville',dist:3.4,bdg:['Community Pillar'],since:'2021',resp:'< 2 hrs',sales:21,ac:'#EC4899',skill:'4.5',lastActive:'1h ago'},
@@ -750,6 +782,7 @@ const ICON_PATHS={
   play:'M6 3l14 9-14 9z',
   eye:'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 15a3 3 0 100-6 3 3 0 000 6z',
   lock:'M18 10H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2zM8 10V7a4 4 0 018 0v3',
+  card:'M21 4H3a2 2 0 00-2 2v12a2 2 0 002 2h18a2 2 0 002-2V6a2 2 0 00-2-2zM1 10h22M5.5 15h3',
   phone:'M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L8.1 9.9a16 16 0 006 6l1.3-1.3a2 2 0 012.1-.4c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z',
   mail:'M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zM22 6l-10 7L2 6',
   list:'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
@@ -911,10 +944,25 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
         e(Row,{key:'l',label:'Location',desc:'Used for distance',r:e('span',{style:{fontSize:12,color:C.tx}},s.location)}),
         e(Row,{key:'sk',label:'DUPR Rating',desc:'Skill level',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
       ]),
-      e(Sec,{title:'PAYMENT HANDLES',key:'pay'},[
-        e('div',{style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.5,padding:'8px 10px',background:C.tl+'10',borderRadius:8,border:`1px solid ${C.tl}30`}},'Only revealed inside confirmed chat threads after a deal is accepted. Not shown publicly.'),
-        e('div',{style:{marginBottom:8}},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:4,display:'block'}},'CASH APP'),e('input',{value:s.cashapp||'',onChange:ev=>up('cashapp',ev.target.value),placeholder:'$yourhandle',style:IS})]),
-        e('div',null,[e('label',{style:{fontSize:9,color:C.mt,marginBottom:4,display:'block'}},'VENMO'),e('input',{value:s.venmo||'',onChange:ev=>up('venmo',ev.target.value),placeholder:'@your-handle',style:IS})]),
+      e(Sec,{title:'PAYOUTS',key:'pay'},[
+        // Placeholder for the central payout account (Stripe Connect). Not wired
+        // up yet — see the PAYMENTS block near the top of the file.
+        e('div',{key:'acct',style:{border:`1.5px solid ${C.lm}45`,background:C.lm+'0D',borderRadius:12,padding:'12px 13px',marginBottom:12}},[
+          e('div',{key:'t',style:{display:'flex',alignItems:'center',gap:9}},[
+            e('div',{key:'ic',style:{width:30,height:30,borderRadius:8,background:C.lm+'20',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},[e(Ic,{key:'i',n:'card',s:16,c:C.lm,sw:2})]),
+            e('div',{key:'tx',style:{flex:1}},[
+              e('div',{key:'b',style:{fontSize:12,fontWeight:800,color:C.tx}},`${PAYMENTS.brand} payout account`),
+              e('div',{key:'s',style:{fontSize:9,color:C.mt,marginTop:1}},'Buyers pay in-app, money lands in your bank'),
+            ]),
+            e('span',{key:'bd',style:{fontSize:8,fontWeight:900,letterSpacing:.5,color:C.am,background:C.am+'1F',border:`1px solid ${C.am}45`,borderRadius:6,padding:'3px 6px',flexShrink:0}},payoutStatus(me).label.toUpperCase()),
+          ]),
+          e('button',{key:'b',disabled:!PAYMENTS.enabled,onClick:()=>{if(PAYMENTS.enabled)createPayoutOnboardingLink();},style:{width:'100%',marginTop:11,padding:'10px 0',borderRadius:10,border:'none',background:PAYMENTS.enabled?C.lm:C.dm,color:PAYMENTS.enabled?'#fff':C.mt,fontSize:12,fontWeight:800,cursor:PAYMENTS.enabled?'pointer':'not-allowed'}},'Connect payout account'),
+          e('div',{key:'n',style:{fontSize:9,color:C.mt,marginTop:7,lineHeight:1.5}},`Powered by ${PAYMENTS.provider}. We'll let you know as soon as onboarding opens up.`),
+        ]),
+        e('div',{key:'dh',style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:8}},'DIRECT HANDLES (UNTIL THEN)'),
+        e('div',{key:'dn',style:{fontSize:10,color:C.mt,marginBottom:9,lineHeight:1.5,padding:'8px 10px',background:C.tl+'10',borderRadius:8,border:`1px solid ${C.tl}30`}},'Only revealed inside confirmed chat threads after a deal is accepted. Not shown publicly.'),
+        e('div',{key:'ca',style:{marginBottom:8}},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:4,display:'block'}},'CASH APP'),e('input',{value:s.cashapp||'',onChange:ev=>up('cashapp',ev.target.value),placeholder:'$yourhandle',style:IS})]),
+        e('div',{key:'vn'},[e('label',{style:{fontSize:9,color:C.mt,marginBottom:4,display:'block'}},'VENMO'),e('input',{value:s.venmo||'',onChange:ev=>up('venmo',ev.target.value),placeholder:'@your-handle',style:IS})]),
       ]),
       e(Sec,{title:'NOTIFICATIONS',key:'nt'},[
         e(Row,{key:'wm',label:'Wishlist matches',desc:'When wishlist paddles list nearby',r:e(Tog,{on:s.notifWishlist,onChange:()=>up('notifWishlist',!s.notifWishlist)})}),
@@ -1363,18 +1411,63 @@ function MsgCard({m,onAccept,onDecline,onCounter}){
   if(m.kind==='accept')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.ok+'15',borderRadius:11,padding:'8px 13px',border:`1px solid ${C.ok}40`,textAlign:'center'}},[e(IcTxt,{n:'check',s:11,style:{fontSize:10,fontWeight:800,color:C.ok}},'DEAL ACCEPTED'),e('div',{style:{fontSize:11,color:C.tx,fontWeight:600,marginTop:2}},`$${m.amount} · ${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},'Coordinate meet-up & payment below')])]);
   if(m.kind==='decline')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.rd+'12',borderRadius:11,padding:'7px 13px',border:`1px solid ${C.rd}30`,textAlign:'center'}},[e(IcTxt,{n:'close',s:11,style:{fontSize:10,fontWeight:800,color:C.rd}},'Offer declined'),m.amount&&e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},`$${m.amount}`)])]);
   if(m.kind==='meetup')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.lm+'12',borderRadius:11,padding:'9px 13px',border:`1px solid ${C.lm}35`,textAlign:'center',maxWidth:'85%'}},[e(IcTxt,{n:'pin',s:11,style:{fontSize:10,fontWeight:800,color:C.lm,marginBottom:2}},'MEET-UP PROPOSED'),e('div',{style:{fontSize:12,color:C.tx,fontWeight:700}},m.place),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},`${m.when} · ${m.time}`),e('div',{style:{fontSize:9,color:C.tl,marginTop:4}},'Reply to confirm or suggest another time')])]);
-  if(m.kind==='payment')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.tl+'15',borderRadius:13,border:`1.5px solid ${C.tl}50`,padding:'9px 11px'}},[e(IcTxt,{n:'dollar',s:10,style:{fontSize:9,color:C.tl,fontWeight:800,letterSpacing:.5,marginBottom:4}},`SENT VIA ${m.method.toUpperCase()}`),e('div',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.tx}},`$${m.amount}`),e('div',{style:{fontSize:9,color:C.mt}},`To ${m.handle}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])]);
+  if(m.kind==='payment')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.tl+'15',borderRadius:13,border:`1.5px solid ${C.tl}50`,padding:'9px 11px'}},[e(IcTxt,{n:'dollar',s:10,style:{fontSize:9,color:C.tl,fontWeight:800,letterSpacing:.5,marginBottom:4}},`SENT VIA ${m.method.toUpperCase()}`),e('div',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.tx}},`$${m.amount}`),m.handle&&e('div',{style:{fontSize:9,color:C.mt}},`To ${m.handle}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])]);
   return null;
 }
 
-function PaymentSheet({onClose,onSend,amount,seller}){
+function PaymentSheet({onClose,onSend,amount,seller,showToast}){
+  const q=checkoutQuote(amount);
+  const soon=!PAYMENTS.enabled;
+  // Direct settle-up options stay available until the in-app rail ships.
+  const direct=[
+    {method:'Cash',handle:'',bg:C.tl,sub:'Hand it over at the meet-up'},
+    seller.cashapp&&{method:'Cash App',handle:seller.cashapp,bg:'#00D632',sub:seller.cashapp},
+    seller.venmo&&{method:'Venmo',handle:seller.venmo,bg:'#3D95CE',sub:seller.venmo},
+  ].filter(Boolean);
+  const Line=({l,v,strong})=>e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginTop:strong?7:4}},[
+    e('span',{key:'l',style:{fontSize:strong?12:11,color:strong?C.tx:C.mt,fontWeight:strong?800:500}},l),
+    e('span',{key:'v',className:'tnum',style:{fontSize:strong?15:11,color:strong?C.tx:C.mt,fontWeight:strong?900:600}},v),
+  ]);
   return e('div',{style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'flex-end',zIndex:30}},[
-    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:24,borderTopRightRadius:24,padding:18,animation:'sheetIn var(--dur-3) var(--ease-out)'}},[
-      e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},`Send $${amount}`),e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})])]),
-      e('div',{style:{fontSize:11,color:C.mt,marginBottom:14,padding:'8px 11px',background:C.tl+'10',borderRadius:9,border:`1px solid ${C.tl}30`}},`Handles only revealed in this confirmed chat. Pay outside the app via the buttons below.`),
-      seller.cashapp&&e('button',{onClick:()=>onSend('Cash App',seller.cashapp),style:{width:'100%',padding:'13px 14px',borderRadius:12,border:'none',background:'#00D632',color:'#fff',fontSize:13,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:11,marginBottom:8}},[e(Ic,{n:'dollar',s:18,c:'#fff',sw:2}),e('div',{style:{flex:1,textAlign:'left'}},[e('div',{style:{fontSize:13,fontWeight:800}},'Cash App'),e('div',{style:{fontSize:10,opacity:.85,marginTop:1}},seller.cashapp)]),e(Ic,{n:'chevron',s:14,c:'#fff'})]),
-      seller.venmo&&e('button',{onClick:()=>onSend('Venmo',seller.venmo),style:{width:'100%',padding:'13px 14px',borderRadius:12,border:'none',background:'#3D95CE',color:'#fff',fontSize:13,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:11}},[e(Ic,{n:'dollar',s:18,c:'#fff',sw:2}),e('div',{style:{flex:1,textAlign:'left'}},[e('div',{style:{fontSize:13,fontWeight:800}},'Venmo'),e('div',{style:{fontSize:10,opacity:.85,marginTop:1}},seller.venmo)]),e(Ic,{n:'chevron',s:14,c:'#fff'})]),
-      e('div',{style:{fontSize:9,color:C.mt,textAlign:'center',marginTop:10}},'Tap to deep-link to the app with seller pre-filled'),
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:24,borderTopRightRadius:24,padding:18,animation:'sheetIn var(--dur-3) var(--ease-out)',maxHeight:'92%',overflowY:'auto'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},[e('div',{style:{fontSize:15,fontWeight:900,color:C.tx}},`Pay $${q.subtotal}`),e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})])]),
+
+      // --- In-app rail (placeholder) — the option we're moving everyone to ---
+      e('div',{key:'dp',style:{border:`1.5px solid ${C.lm}45`,background:C.lm+'0D',borderRadius:14,padding:'13px 14px',marginBottom:14}},[
+        e('div',{key:'t',style:{display:'flex',alignItems:'center',gap:9,marginBottom:9}},[
+          e('div',{key:'ic',style:{width:32,height:32,borderRadius:9,background:C.lm+'20',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},[e(Ic,{key:'i',n:'card',s:17,c:C.lm,sw:2})]),
+          e('div',{key:'tx',style:{flex:1}},[
+            e('div',{key:'b',style:{fontSize:13,fontWeight:900,color:C.tx}},PAYMENTS.brand),
+            e('div',{key:'s',style:{fontSize:9,color:C.mt,marginTop:1}},'Card or Apple Pay · held until you confirm the meet-up'),
+          ]),
+          soon&&e('span',{key:'bd',style:{fontSize:8,fontWeight:900,letterSpacing:.5,color:C.am,background:C.am+'1F',border:`1px solid ${C.am}45`,borderRadius:6,padding:'3px 6px',flexShrink:0}},'COMING SOON'),
+        ]),
+        e('div',{key:'q',style:{borderTop:`1px solid ${C.bd}`,paddingTop:8}},[
+          e(Line,{key:'s',l:'Item',v:`$${q.subtotal}`}),
+          e(Line,{key:'f',l:'Processing fee',v:`$${q.fee.toFixed(2)}`}),
+          e(Line,{key:'t',l:'Total',v:`$${q.total.toFixed(2)}`,strong:true}),
+        ]),
+        // Left clickable while it's a placeholder so tapping explains itself —
+        // a truly disabled button can't fire onClick, so it just feels broken.
+        e('button',{key:'b',onClick:()=>{
+          if(soon){showToast&&showToast(`${PAYMENTS.brand} isn't live yet — settle up directly for now`);return;}
+          startCheckout();
+        },style:{width:'100%',marginTop:12,padding:'12px 0',borderRadius:11,border:'none',background:soon?C.dm:C.lm,color:soon?C.mt:'#fff',fontSize:13,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},[e(Ic,{key:'i',n:'lock',s:14,sw:2}),soon?'Not available yet':`Pay $${q.total.toFixed(2)}`]),
+        e('div',{key:'n',style:{fontSize:9,color:C.mt,textAlign:'center',marginTop:7,lineHeight:1.5}},soon?`In-app payments are rolling out soon. ${seller.name||'The seller'} will be paid out automatically once you both confirm the hand-off.`:'Protected by DINK — refunded if the item never shows up.'),
+      ]),
+
+      // --- Direct settle-up, still the working path today ---
+      e('div',{key:'dl',style:{display:'flex',alignItems:'center',gap:8,marginBottom:10}},[
+        e('div',{style:{flex:1,height:1,background:C.dm}}),
+        e('span',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.5}},'PAY DIRECTLY FOR NOW'),
+        e('div',{style:{flex:1,height:1,background:C.dm}}),
+      ]),
+      ...direct.map(o=>e('button',{key:o.method,onClick:()=>onSend(o.method,o.handle),style:{width:'100%',padding:'13px 14px',borderRadius:12,border:'none',background:o.bg,color:'#fff',fontSize:13,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:11,marginBottom:8}},[
+        e(Ic,{key:'i',n:'dollar',s:18,c:'#fff',sw:2}),
+        e('div',{key:'l',style:{flex:1,textAlign:'left'}},[e('div',{style:{fontSize:13,fontWeight:800}},o.method),e('div',{style:{fontSize:10,opacity:.85,marginTop:1}},o.sub)]),
+        e(Ic,{key:'c',n:'chevron',s:14,c:'#fff'}),
+      ])),
+      e('div',{key:'f',style:{fontSize:9,color:C.mt,textAlign:'center',marginTop:6,lineHeight:1.5}},'Handles are only revealed inside this confirmed chat. Money sent outside DINK isn\'t covered by buyer protection.'),
     ]),
   ]);
 }
@@ -1506,7 +1599,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
     const showMeetup=th.dealStatus==='accepted'&&!hasMeetup&&!dealDone;
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
     return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
-      paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu}),
+      paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu,showToast}),
       e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',alignItems:'center',padding:0}},[e(Ic,{n:'back',s:20,sw:2})]),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e(Ic,{n:'checkDouble',s:11,c:C.lm,sw:2.5})]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},'aria-label':'Conversation options',style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,padding:'4px 8px',display:'flex'}},[e(Ic,{n:'more',s:17,sw:2.5})])]),
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'shieldCheck',s:13}),'Safe meet-up tips']),
