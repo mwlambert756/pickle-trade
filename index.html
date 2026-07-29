@@ -3479,6 +3479,18 @@ function App(){
     return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
   }).length;
   const handleNav=(id)=>{if(id==='sell'){setCrt(true);setView(null);return;}setTab(id);setView(null);if(id==='messages'&&activeMsgIdx===null);};
+  // The wordmark doubles as "home". It's the one nav control that stays visible
+  // everywhere — the tab bar hides behind overlays and listing detail — so it has
+  // to tear the whole stack down, not just switch tabs underneath what's on top.
+  const goHome=()=>{
+    haptic('light');
+    setCrt(false);setCrtPrefill(null);
+    setNotifOpen(false);setSavedOpen(false);setSettingsOpen(false);setOfferOpen(null);
+    setSellerView(null);setBuyConfirm(null);setReviewFor(null);
+    setSafetyOpen(false);setCondGuideOpen(false);setVerifyOpen(false);
+    setActiveMsgIdx(null);
+    setView(null);setTab('feed');
+  };
   const overlayOpen=crt||notifOpen||savedOpen||settingsOpen||offerOpen;
 
   // --- AUTH GATE ---
@@ -3496,7 +3508,7 @@ function App(){
   return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
     e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`var(--sh-4), 0 0 0 1px ${C.bd}`,position:'relative'}},[
       e('div',{key:'sb',style:{height:42,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 18px',borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
-        e('div',{style:{display:'flex',alignItems:'center',gap:6}},[e('span',{style:{fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},'DINK'),e('span',{style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
+        e('button',{onClick:goHome,'aria-label':'DINK Exchange — go to Discover',title:'Go to Discover',style:{display:'flex',alignItems:'center',gap:6,background:'transparent',border:'none',padding:0,cursor:'pointer'}},[e('span',{key:'d',style:{fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},'DINK'),e('span',{key:'x',style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
         e('div',{style:{display:'flex',alignItems:'center',gap:14}},[
           e('button',{onClick:()=>setSavedOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:saved.length>0?C.lm:C.mt,lineHeight:1,display:'flex'}},[e(Ic,{key:'i',n:'heart',s:17,fill:saved.length>0}),saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
           e('button',{onClick:()=>setNotifOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:C.lm,display:'flex'}},[e(Ic,{key:'i',n:'bell',s:17}),notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
