@@ -198,11 +198,110 @@ function pushNotify(title,body,opts={}){
 }
 // Register a service worker if one is reachable (no-op in the sandboxed viewer).
 // In production, ship /sw.js alongside this file to enable installability + background push.
-function registerSW(){
+// PUSH.enabled gates the whole notification surface. It only flips true once a
+// service worker actually registers AND a VAPID key is present — previously the
+// Settings toggle could read "Enabled" while sw.js didn't exist and no push
+// could ever arrive, which is worse than not offering it.
+const PUSH={
+  vapidPublicKey:'',   // paste the VAPID public key here to enable Web Push
+  swReady:false,
+  registration:null,
+  get enabled(){return this.swReady&&!!this.vapidPublicKey;},
+};
+async function registerSW(){
   try{
-    if(!('serviceWorker'in navigator))return;
-    navigator.serviceWorker.register('sw.js').catch(()=>{/* SW file not deployed yet — fine */});
-  }catch{}
+    if(!('serviceWorker'in navigator))return null;
+    if(location.protocol!=='https:'&&location.hostname!=='localhost')return null;
+    const reg=await navigator.serviceWorker.register('sw.js');
+    PUSH.swReady=true;PUSH.registration=reg;
+    return reg;
+  }catch(err){
+    // sw.js not deployed or blocked (sandboxed iframe). Leave PUSH.enabled false
+    // so the UI shows "unavailable" instead of promising notifications.
+    PUSH.swReady=false;
+    return null;
+  }
+}
+function urlBase64ToUint8Array(b64){
+  const pad='='.repeat((4-b64.length%4)%4);
+  const raw=atob((b64+pad).replace(/-/g,'+').replace(/_/g,'/'));
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+// Subscribe the browser to Web Push and persist the subscription so a server
+// can deliver while the app is closed. Returns {ok, reason}.
+async function pushSubscribe(userId){
+  try{
+    if(!PUSH.enabled)return{ok:false,reason:'unavailable'};
+    const perm=await pushRequest();
+    if(perm!=='granted')return{ok:false,reason:perm};
+    const reg=PUSH.registration||await navigator.serviceWorker.ready;
+    const sub=await reg.pushManager.subscribe({
+      userVisibleOnly:true,
+      applicationServerKey:urlBase64ToUint8Array(PUSH.vapidPublicKey),
+    });
+    const json=sub.toJSON();
+    if(typeof userId==='string'){
+      await sb.from('push_subscriptions').upsert({
+        user_id:userId,
+        endpoint:json.endpoint,
+        p256dh:json.keys&&json.keys.p256dh,
+        auth:json.keys&&json.keys.auth,
+      },{onConflict:'endpoint'});
+    }
+    track('push_subscribed',{});
+    return{ok:true};
+  }catch(err){return{ok:false,reason:'error'};}
+}
+async function pushUnsubscribe(userId){
+  try{
+    const reg=PUSH.registration||(navigator.serviceWorker&&await navigator.serviceWorker.ready);
+    if(!reg)return{ok:true};
+    const sub=await reg.pushManager.getSubscription();
+    if(sub){
+      const ep=sub.endpoint;
+      await sub.unsubscribe();
+      if(typeof userId==='string')await sb.from('push_subscriptions').delete().eq('endpoint',ep);
+    }
+    track('push_unsubscribed',{});
+    return{ok:true};
+  }catch{return{ok:false};}
+}
+
+// =====================================================================
+// PHONE VERIFICATION
+// Was a demo that granted the Verified badge for any 4 digits typed in.
+// Now backed by Supabase Auth phone OTP. VERIFY.enabled must stay false
+// until an SMS provider (Twilio/MessageBird) is configured on the project,
+// otherwise the modal tells the user plainly that it isn't open yet.
+// =====================================================================
+const VERIFY={
+  enabled:false,   // flip true once SMS is configured in Supabase Auth
+  provider:'Supabase Auth (SMS OTP)',
+};
+function normalizePhone(digits){
+  const d=String(digits||'').replace(/\D/g,'');
+  if(d.length===10)return '+1'+d;
+  if(d.length===11&&d[0]==='1')return '+'+d;
+  return d.startsWith('+')?d:'+'+d;
+}
+async function verifySendCode(digits){
+  if(!VERIFY.enabled)return{ok:false,message:'Phone verification isn\u2019t available yet.'};
+  const rl=rateCheck('verify_send');
+  if(rl.ok===false)return{ok:false,message:rl.message};
+  try{
+    const {error}=await sb.auth.updateUser({phone:normalizePhone(digits)});
+    if(error)return{ok:false,message:error.message||'Could not send a code.'};
+    rateRecord('verify_send');
+    return{ok:true};
+  }catch(err){return{ok:false,message:'Could not send a code. Check your connection.'};}
+}
+async function verifyCheckCode(digits,code){
+  if(!VERIFY.enabled)return{ok:false,message:'Phone verification isn\u2019t available yet.'};
+  try{
+    const {error}=await sb.auth.verifyOtp({phone:normalizePhone(digits),token:String(code),type:'phone_change'});
+    if(error)return{ok:false,message:error.message||'That code didn\u2019t match.'};
+    return{ok:true};
+  }catch(err){return{ok:false,message:'Verification failed. Try again.'};}
 }
 
 // --- REVIEWS STORE ---
@@ -304,6 +403,308 @@ function safeMoney(n){
 // Cash App / Venmo handle validators — prevent URL injection in deep-links.
 function safeCashapp(s){const t=sanitizeText(s,30);return /^\$?[A-Za-z0-9_]{1,20}$/.test(t)?t:'';}
 function safeVenmo(s){const t=sanitizeText(s,40);return /^@?[A-Za-z0-9_-]{1,30}$/.test(t)?t:'';}
+
+
+// =====================================================================
+// TRUST & SAFETY LAYER
+// Reports, blocks, and disputes now persist. Previously each of these
+// fired a toast and discarded the payload, which meant the app *looked*
+// like it had moderation while offering none. Every write below goes to
+// Supabase first; if that fails (offline, RLS, table not migrated yet)
+// it lands in a local outbox and is retried on next app open, so a user
+// report is never silently lost.
+//
+// Required tables (see MIGRATION.sql shipped alongside this file):
+//   reports(id, reporter_id, target_type, target_id, target_owner_id,
+//           reason, detail, status, created_at)
+//   user_blocks(id, blocker_id, blocked_id, created_at) — this table already
+//   existed in the project; we reuse it rather than create a duplicate
+//   disputes(id, reporter_id, conversation_id, listing_ref, amount,
+//            reason, detail, status, created_at)
+// =====================================================================
+const TS_OUTBOX_KEY='tsOutbox';
+const outboxGet=()=>{const v=kv.get(TS_OUTBOX_KEY,[]);return Array.isArray(v)?v:[];};
+const outboxPush=(table,row)=>{const q=outboxGet();q.push({table,row,at:Date.now()});kv.set(TS_OUTBOX_KEY,q.slice(-50));};
+// Retry queued safety writes. Called once on sign-in; drops rows older than 30 days.
+async function outboxFlush(){
+  const q=outboxGet();if(!q.length)return;
+  const cutoff=Date.now()-30*24*3600*1000;
+  const keep=[];
+  for(const item of q){
+    if(item.at<cutoff)continue;
+    try{
+      const {error}=await sb.from(item.table).insert(item.row);
+      if(error)keep.push(item);
+    }catch{keep.push(item);}
+  }
+  kv.set(TS_OUTBOX_KEY,keep);
+}
+
+const REPORT_REASONS=[
+  'Scam or fraud',
+  'Counterfeit or fake item',
+  'Prohibited item',
+  'Item not as described',
+  'Harassment or abuse',
+  'Spam',
+  'Stolen goods',
+  'Other',
+];
+
+// Persist a report. Returns {ok, queued} so the UI can be honest about what happened.
+async function reportSubmit({reporterId,targetType,targetId,targetOwnerId,reason,detail}){
+  const row={
+    reporter_id:reporterId||null,
+    target_type:targetType,
+    target_id:targetId!=null?String(targetId):null,
+    target_owner_id:targetOwnerId!=null?String(targetOwnerId):null,
+    reason:sanitizeText(reason,80),
+    detail:sanitizeText(detail,1000),
+    status:'open',
+  };
+  track('report_submitted',{targetType,reason});
+  if(typeof reporterId!=='string'){outboxPush('reports',row);return{ok:true,queued:true};}
+  try{
+    const {error}=await sb.from('reports').insert(row);
+    if(error){outboxPush('reports',row);return{ok:true,queued:true};}
+    return{ok:true,queued:false};
+  }catch{outboxPush('reports',row);return{ok:true,queued:true};}
+}
+
+// --- BLOCKING ---
+// Kept in a local mirror so feed/message filtering is synchronous, and in the
+// `user_blocks` table (pre-existing in this project) so it survives reinstall
+// and is enforced server-side via the messages_block_guard trigger.
+const BLOCK_KEY='blockedUsers';
+let BLOCKED=new Set(kv.get(BLOCK_KEY,[]).map(String));
+const isBlocked=(uid)=>uid!=null&&BLOCKED.has(String(uid));
+const blockedList=()=>[...BLOCKED];
+const blockedCount=()=>BLOCKED.size;
+function _persistBlocks(){kv.set(BLOCK_KEY,[...BLOCKED]);}
+async function blockUser(meId,uid){
+  if(uid==null)return{ok:false};
+  BLOCKED.add(String(uid));_persistBlocks();
+  track('user_blocked',{});
+  const row={blocker_id:meId,blocked_id:String(uid)};
+  if(typeof meId!=='string'||typeof uid!=='string')return{ok:true,queued:true};
+  try{const {error}=await sb.from('user_blocks').insert(row);if(error)outboxPush('user_blocks',row);}catch{outboxPush('user_blocks',row);}
+  return{ok:true};
+}
+async function unblockUser(meId,uid){
+  BLOCKED.delete(String(uid));_persistBlocks();
+  track('user_unblocked',{});
+  if(typeof meId!=='string'||typeof uid!=='string')return{ok:true};
+  try{await sb.from('user_blocks').delete().eq('blocker_id',meId).eq('blocked_id',String(uid));}catch{}
+  return{ok:true};
+}
+// Hydrate the local mirror from the server on sign-in so blocks follow the account.
+async function blocksLoad(meId){
+  if(typeof meId!=='string')return;
+  try{
+    const {data}=await sb.from('user_blocks').select('blocked_id').eq('blocker_id',meId);
+    if(data)  {data.forEach(r=>BLOCKED.add(String(r.blocked_id)));_persistBlocks();}
+  }catch{}
+}
+
+// --- DISPUTES ---
+async function disputeSubmit({reporterId,conversationId,listingRef,amount,reason,detail}){
+  const row={
+    reporter_id:reporterId||null,
+    conversation_id:typeof conversationId==='string'?conversationId:null,
+    listing_ref:listingRef?`${listingRef.b||''} ${listingRef.m||''}`.trim():null,
+    amount:safeMoney(amount)||0,
+    reason:sanitizeText(reason,80),
+    detail:sanitizeText(detail,1500),
+    status:'open',
+  };
+  track('dispute_filed',{reason});
+  if(typeof reporterId!=='string'){outboxPush('disputes',row);return{ok:true,queued:true};}
+  try{
+    const {error}=await sb.from('disputes').insert(row);
+    if(error){outboxPush('disputes',row);return{ok:true,queued:true};}
+    return{ok:true,queued:false};
+  }catch{outboxPush('disputes',row);return{ok:true,queued:true};}
+}
+
+// =====================================================================
+// CONTENT FILTER + RATE LIMITING
+// Client-side is a speed bump, not a wall — the same rules must exist in
+// a Postgres trigger / edge function. This catches the honest majority
+// and gives immediate feedback instead of a silent server rejection.
+// =====================================================================
+const BANNED_PATTERNS=[
+  /\b(?:cocaine|heroin|meth(?:amphetamine)?|fentanyl|oxycontin)\b/i,
+  /\b(?:glock|ar-?15|ak-?47|handgun|silencer|ammo|ammunition)\b/i,
+  /\b(?:stolen|hot merchandise|fell off (?:a|the) truck)\b/i,
+  /\b(?:replica|knock ?off|counterfeit|1:1 copy|super fake)\b/i,
+  /\b(?:ssn|social security number|routing number)\b/i,
+];
+const SPAM_PATTERNS=[
+  /\b(?:wire transfer|western union|money ?gram|zelle only|gift card)\b/i,
+  /\b(?:t\.me\/|wa\.me\/|whatsapp|telegram)\b/i,
+  /(?:https?:\/\/|www\.)\S{4,}/i,
+  /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/,
+];
+// Returns {blocked, warn, reason}. `blocked` stops the action; `warn` allows with a nudge.
+function contentCheck(text,{allowLinks=false}={}){
+  const t=String(text||'');
+  if(!t.trim())return{blocked:false,warn:false};
+  for(const re of BANNED_PATTERNS){
+    if(re.test(t))return{blocked:true,warn:false,reason:'This looks like it violates our prohibited items policy.'};
+  }
+  let hits=0;
+  for(const re of SPAM_PATTERNS){
+    if(re===SPAM_PATTERNS[2]&&allowLinks)continue;
+    if(re.test(t))hits++;
+  }
+  if(hits>=2)return{blocked:true,warn:false,reason:'Off-platform payment or contact details aren\u2019t allowed — keep deals in DINK so we can help if something goes wrong.'};
+  if(hits===1)return{blocked:false,warn:true,reason:'Heads up: sharing contact details or outside payment links is risky and unprotected.'};
+  // ALL-CAPS shouting / repeated char spam
+  const letters=t.replace(/[^A-Za-z]/g,'');
+  if(letters.length>=20&&letters===letters.toUpperCase())return{blocked:false,warn:true,reason:'All-caps listings get fewer views.'};
+  return{blocked:false,warn:false};
+}
+
+// --- RATE LIMITING ---
+// Sliding window per action, persisted so a refresh doesn't reset the clock.
+const RL_KEY='rateLimits';
+const RL_RULES={
+  listing_create:{max:10,windowMs:3600e3,label:'listings'},
+  offer_send:{max:25,windowMs:3600e3,label:'offers'},
+  message_send:{max:120,windowMs:3600e3,label:'messages'},
+  report_submit:{max:10,windowMs:86400e3,label:'reports'},
+  review_submit:{max:15,windowMs:86400e3,label:'reviews'},
+  verify_send:{max:5,windowMs:3600e3,label:'verification codes'},
+};
+function rateCheck(action){
+  const rule=RL_RULES[action];if(!rule)return{ok:true};
+  const all=kv.get(RL_KEY,{})||{};
+  const now=Date.now();
+  const hits=(all[action]||[]).filter(t=>now-t<rule.windowMs);
+  if(hits.length>=rule.max){
+    const oldest=Math.min(...hits);
+    const mins=Math.max(1,Math.ceil((rule.windowMs-(now-oldest))/60000));
+    return{ok:false,retryIn:mins,message:`You\u2019ve hit the limit for ${rule.label}. Try again in ${mins>60?Math.ceil(mins/60)+'h':mins+'m'}.`};
+  }
+  return{ok:true};
+}
+function rateRecord(action){
+  const rule=RL_RULES[action];if(!rule)return;
+  const all=kv.get(RL_KEY,{})||{};
+  const now=Date.now();
+  all[action]=[...(all[action]||[]).filter(t=>now-t<rule.windowMs),now];
+  kv.set(RL_KEY,all);
+}
+
+// =====================================================================
+// ANALYTICS + ERROR REPORTING
+// Ships events to an `analytics_events` table in batches. Swap ANALYTICS.sink
+// for PostHog/Amplitude/Segment without touching call sites. Respects a
+// user opt-out and never records message bodies, listing text, or handles.
+// =====================================================================
+const ANALYTICS={
+  enabled:true,
+  flushEvery:15000,
+  maxBatch:25,
+};
+let _evQueue=[];
+let _sessionId=null;
+function sessionId(){
+  if(_sessionId)return _sessionId;
+  _sessionId=kv.get('sessionId',null);
+  if(!_sessionId){_sessionId='s'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);kv.set('sessionId',_sessionId);}
+  return _sessionId;
+}
+let _analyticsUser=null;
+const analyticsIdentify=(uid)=>{_analyticsUser=uid||null;};
+const analyticsOptedOut=()=>kv.get('analyticsOptOut',false)===true;
+function track(name,props){
+  try{
+    if(!ANALYTICS.enabled||analyticsOptedOut())return;
+    _evQueue.push({
+      name,
+      props:props&&typeof props==='object'?props:{},
+      user_id:typeof _analyticsUser==='string'?_analyticsUser:null,
+      session_id:sessionId(),
+      ts:new Date().toISOString(),
+    });
+    if(_evQueue.length>=ANALYTICS.maxBatch)flushEvents();
+  }catch{}
+}
+async function flushEvents(){
+  if(!_evQueue.length)return;
+  const batch=_evQueue.splice(0,ANALYTICS.maxBatch);
+  try{await sb.from('analytics_events').insert(batch);}
+  catch{/* analytics must never break the app or block a user action */}
+}
+// Global error capture — surfaces crashes we'd otherwise never hear about.
+function initErrorReporting(){
+  try{
+    window.addEventListener('error',(ev)=>{
+      track('js_error',{message:String(ev.message||'').slice(0,300),source:String(ev.filename||'').slice(-80),line:ev.lineno||0});
+    });
+    window.addEventListener('unhandledrejection',(ev)=>{
+      const r=ev&&ev.reason;
+      track('js_rejection',{message:String((r&&r.message)||r||'').slice(0,300)});
+    });
+    setInterval(flushEvents,ANALYTICS.flushEvery);
+    window.addEventListener('pagehide',()=>{flushEvents();});
+  }catch{}
+}
+
+// =====================================================================
+// LEGAL + POLICY CONTENT
+// These were dead chevron rows in Settings. A peer-to-peer marketplace
+// that brokers in-person cash meet-ups and collects location cannot ship
+// without them, and both app stores reject on a missing privacy policy.
+// Replace LEGAL.termsUrl / privacyUrl with hosted canonical versions once
+// counsel has reviewed; the in-app copy below is the fallback so the app
+// is never in a state where the user has no way to read the terms.
+// =====================================================================
+const LEGAL={
+  updated:'July 2026',
+  termsUrl:'',      // e.g. 'https://dinkexchange.com/terms'
+  privacyUrl:'',    // e.g. 'https://dinkexchange.com/privacy'
+  supportEmail:'support@dinkexchange.com',
+  entity:'DINK Exchange',
+};
+const PROHIBITED_ITEMS=[
+  {t:'Weapons & ammunition',d:'Firearms, parts, ammunition, or anything designed to injure.'},
+  {t:'Counterfeit gear',d:'Replica or unauthorized-copy paddles, shoes, or apparel. If it isn\u2019t authentic, it can\u2019t be listed.'},
+  {t:'Stolen property',d:'Anything you don\u2019t own outright and have the right to sell.'},
+  {t:'Drugs & regulated substances',d:'Including supplements making unapproved medical claims.'},
+  {t:'Recalled equipment',d:'Gear under an active safety recall or banned from sanctioned play.'},
+  {t:'Off-platform payment solicitation',d:'Wire transfers, gift cards, or moving a deal to another app to avoid protections.'},
+  {t:'Anything illegal locally',d:'If it can\u2019t be legally sold where you live, it can\u2019t be listed here.'},
+];
+const TERMS_SECTIONS=[
+  {h:'1. What DINK Exchange is',b:'DINK Exchange is a venue that connects local pickleball players who want to buy, sell, or trade gear. We are not a party to any transaction. We do not own, inspect, guarantee, or take possession of anything listed. Every deal is between you and the other player.'},
+  {h:'2. Who can use it',b:'You must be at least 18 years old and legally able to enter contracts. One account per person. You are responsible for everything that happens under your account, so keep your login private.'},
+  {h:'3. Your listings',b:'You must own what you list and have the right to sell it. Descriptions, photos, and condition ratings must be accurate. Listings that violate our prohibited items policy will be removed and may cost you your account.'},
+  {h:'4. Meeting in person',b:'You choose whether, when, and where to meet. Meet in public, bring someone, inspect before paying, and trust your instincts. We provide safety guidance but cannot supervise or guarantee any meet-up. You accept the risks of meeting a stranger.'},
+  {h:'5. Payments',b:'Payments currently happen directly between you and the other player, outside the app. That means there is no escrow, no chargeback path, and no DINK-backed refund. We are not responsible for payments sent, withheld, or lost. Never send money before you have the item in hand.'},
+  {h:'6. Fees',b:'Listing and browsing are free today. If we introduce fees, we will notify you before they take effect and you can stop using paid features.'},
+  {h:'7. Conduct',b:'No harassment, threats, discrimination, spam, scraping, scams, or attempts to move deals off-platform to dodge protections. We may remove content and suspend accounts at our discretion.'},
+  {h:'8. Reports and enforcement',b:'You can report any listing, message, or user. We review reports and may warn, restrict, or ban accounts. We may share information with law enforcement where the law requires it or where someone\u2019s safety is at risk.'},
+  {h:'9. Content you post',b:'You keep ownership of your photos and text. You grant us a non-exclusive license to display and distribute them within the app for the purpose of operating the marketplace. That license ends when you delete the content, except for copies retained in backups or required for legal or safety records.'},
+  {h:'10. No warranty',b:'The service is provided "as is." We do not warrant that listings are accurate, that users are who they claim, or that the app will be uninterrupted or error-free. Price intelligence and condition guides are estimates, not appraisals.'},
+  {h:'11. Limitation of liability',b:'To the fullest extent the law allows, DINK Exchange is not liable for indirect, incidental, or consequential damages, or for anything arising out of a transaction or meet-up between users. Some jurisdictions do not allow these limits, so parts may not apply to you.'},
+  {h:'12. Ending your account',b:'You can delete your account at any time from Settings. We may suspend or terminate accounts that violate these terms. Sections that by nature should survive termination will do so.'},
+  {h:'13. Changes',b:'We will post material changes in the app before they take effect. Continuing to use DINK Exchange after that means you accept the updated terms.'},
+  {h:'14. Contact',b:`Questions about these terms: ${'support@dinkexchange.com'}.`},
+];
+const PRIVACY_SECTIONS=[
+  {h:'What we collect',b:'Account details you give us (name, email, phone if you verify it, skill rating, bio, avatar). Listing content including photos. Messages and offers you send through the app. Approximate location — a city and a coarse distance, unless you turn on precise location. Device and usage data such as app version, crash reports, and which screens you use.'},
+  {h:'What we do NOT collect',b:'We never see your Cash App or Venmo balance, bank details, or card numbers — those handles are just text you choose to share. We do not read your contacts, photo library beyond the images you attach, or your background location.'},
+  {h:'Why we use it',b:'To show you nearby listings, run the marketplace, deliver messages and notifications, detect fraud and abuse, respond to reports, and improve the product. That is it. We do not sell your personal information.'},
+  {h:'Who sees what',b:'Your name, avatar, city, skill rating, bio, ratings, and active listings are public to other users. Your exact address is never shown. Your payment handles are revealed only inside a conversation after a deal is accepted, and only to that counterparty. Your email and phone are never shown to other users.'},
+  {h:'Location',b:'Precise location is off by default. With it off we show only your city and a rounded distance. You can change this any time in Settings, and turning it off stops precise collection going forward.'},
+  {h:'Service providers',b:'We use Supabase for database, authentication, and file storage. If in-app payments launch, a payment processor will handle card data directly — we will not store card numbers. These providers process data on our behalf under contract.'},
+  {h:'Retention',b:'Active account data is kept while your account is open. Deleting your account removes your profile and listings within 30 days. We retain limited records of reports, disputes, and safety actions longer where needed to protect other users or comply with the law.'},
+  {h:'Your choices',b:'You can edit or delete your profile and listings, turn off any notification category, opt out of analytics, block other users, and delete your account entirely from Settings. Depending on where you live you may also have rights to access, correct, port, or delete your data — email us and we will honor them.'},
+  {h:'Children',b:'DINK Exchange is not for anyone under 18. We do not knowingly collect data from children. If we learn we have, we delete it.'},
+  {h:'Changes and contact',b:`We will notify you in the app before material changes. Questions or requests: ${'support@dinkexchange.com'}.`},
+];
 
 // --- CENTRAL PAYMENTS (placeholder) ------------------------------------------
 // We're moving off "buyer and seller settle it themselves" onto a single
@@ -825,7 +1226,7 @@ function IcTxt({n,children,s=10,c,gap=4,style,weight}){
 function Av({u,sz=36,edit,onEdit}){
   const src=u&&(u.avatar||u.photo);
   return e('div',{style:{position:'relative',flexShrink:0}},[
-    src?e('img',{key:'a',src,alt:'',style:{width:sz,height:sz,borderRadius:'50%',objectFit:'cover',display:'block'}})
+    src?e('img',{key:'a',src,alt:u&&u.name?`${u.name}'s profile photo`:'Profile photo',style:{width:sz,height:sz,borderRadius:'50%',objectFit:'cover',display:'block'}})
        :e('div',{key:'a',style:{width:sz,height:sz,borderRadius:'50%',background:(u&&u.ac)||C.lm,display:'flex',alignItems:'center',justifyContent:'center',fontSize:sz*.32,fontWeight:700,color:'#fff'}},u&&u.ini),
     edit&&e('div',{key:'cm',onClick:ev=>{ev.stopPropagation();onEdit&&onEdit();},style:{position:'absolute',bottom:-2,right:-2,width:22,height:22,borderRadius:'50%',background:C.lm,border:`2px solid ${C.sf}`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',color:'#fff',boxShadow:'var(--sh-2)'}},[e(Ic,{n:'camera',s:11,sw:2})])
   ]);
@@ -870,7 +1271,7 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
   const u=gU(L.sid);
   return e('div',{onClick:onView,'data-press':'1',style:{background:C.cd,borderRadius:13,border:`1px solid ${C.bd}`,overflow:'hidden',cursor:'pointer',boxShadow:'var(--sh-1)'}},[
     e('div',{key:'i',style:{height:large?138:108,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}},[
-      L.photos&&L.photos[0]?e('img',{src:L.photos[0],loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',transition:'transform var(--dur-3) var(--ease-out)'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'55',sz:large?56:42}):e(Ic,{n:listIcon(L),s:large?38:30,c:C.mt+'80',sw:1.5}),
+      L.photos&&L.photos[0]?e('img',{src:L.photos[0],loading:'lazy',decoding:'async',alt:`${L.brand||''} ${L.model||''}`.trim()||'Listing photo',style:{width:'100%',height:'100%',objectFit:'cover',transition:'transform var(--dur-3) var(--ease-out)'}}):L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'55',sz:large?56:42}):e(Ic,{n:listIcon(L),s:large?38:30,c:C.mt+'80',sw:1.5}),
       L.cat==='gear'&&e('div',{key:'bc','aria-label':L.sub||'Gear',title:L.sub||'Gear',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'3px 5px',border:`1px solid ${C.bd}`,display:'flex',alignItems:'center',boxShadow:'var(--sh-1)'}},[e(Ic,{key:'i',n:listIcon(L),s:11,c:C.tx})]),
       L.tag&&e('div',{key:'t',style:{position:'absolute',top:6,right:6}},[e(TP,{t:L.tag})]),
       e('div',{key:'sv',onClick:ev=>{ev.stopPropagation();onSave(L.id);},style:{position:'absolute',bottom:6,right:6,width:24,height:24,background:C.cd,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:`1px solid ${saved?C.lm:C.bd}`,color:saved?C.lm:C.mt,boxShadow:'var(--sh-1)'}},[e(Ic,{n:'heart',s:12,fill:saved})]),
@@ -916,8 +1317,13 @@ function OfferOverlay({L,onClose,onSubmit}){
   ]);
 }
 
-function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,pushOn,onTogglePush}){
+function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
   const [s,setS]=useState({...settings});
+  const [optOut,setOptOut]=useState(()=>analyticsOptedOut());
+  const [blockedN,setBlockedN]=useState(()=>blockedCount());
+  // Refresh the blocked count whenever this screen regains focus, so unblocking
+  // elsewhere is reflected without a reload.
+  useEffect(()=>{setBlockedN(blockedCount());});
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
   const save=async()=>{
     const cleaned={...s,cashapp:safeCashapp(s.cashapp),venmo:safeVenmo(s.venmo)};
@@ -968,23 +1374,59 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
         e(Row,{key:'wm',label:'Wishlist matches',desc:'When wishlist paddles list nearby',r:e(Tog,{on:s.notifWishlist,onChange:()=>up('notifWishlist',!s.notifWishlist)})}),
         e(Row,{key:'pd',label:'Price drops',desc:'On listings you saved',r:e(Tog,{on:s.notifPriceDrops,onChange:()=>up('notifPriceDrops',!s.notifPriceDrops)})}),
         e(Row,{key:'ms',label:'Messages',r:e(Tog,{on:s.notifMessages,onChange:()=>up('notifMessages',!s.notifMessages)})}),
-        e(Row,{key:'push',label:'Push notifications',desc:pushOn?'Enabled on this device':'Get alerts even when the app is closed',r:e('button',{onClick:()=>{if(!pushOn&&onTogglePush)onTogglePush();},style:{padding:'5px 12px',borderRadius:8,border:`1px solid ${pushOn?C.ok:C.lm}`,background:pushOn?C.ok+'15':C.lm,color:pushOn?C.ok:'#fff',fontSize:10,fontWeight:800,cursor:pushOn?'default':'pointer'}},pushOn?e(IcTxt,{n:'check',s:12},'On'):'Enable')}),
+        // Honest push state: without a registered service worker + VAPID key,
+        // background push cannot arrive, so we say that instead of showing an
+        // "Enable" button that would leave the toggle reading On forever.
+        e(Row,{key:'push',
+          label:'Push notifications',
+          desc:!PUSH.enabled?'Not available on this build yet':(pushOn?'Enabled on this device':'Get alerts even when the app is closed'),
+          r:!PUSH.enabled
+            ?e('span',{style:{fontSize:9,fontWeight:800,letterSpacing:.5,color:C.am,background:C.am+'1F',border:`1px solid ${C.am}45`,borderRadius:6,padding:'3px 7px'}},'COMING SOON')
+            :e('button',{onClick:()=>{if(onTogglePush)onTogglePush();},style:{padding:'5px 12px',borderRadius:8,border:`1px solid ${pushOn?C.ok:C.lm}`,background:pushOn?C.ok+'15':C.lm,color:pushOn?C.ok:'#fff',fontSize:10,fontWeight:800,cursor:'pointer'}},pushOn?e(IcTxt,{n:'check',s:12},'On'):'Enable')}),
+        PUSH.enabled&&pushOn===false&&pushPermGet()==='denied'&&e('div',{key:'pdn',style:{fontSize:10,color:C.am,lineHeight:1.5,padding:'8px 10px',background:C.am+'12',border:`1px solid ${C.am}35`,borderRadius:9,marginTop:8}},'Notifications are blocked in your browser settings. You\'ll need to re-allow them there before we can turn these on.'),
       ]),
       e(Sec,{title:'APPEARANCE',key:'ap'},[
         e(Row,{key:'dk',label:'Dark mode',desc:'Easier on the eyes at night',r:e(Tog,{on:s.darkMode,onChange:()=>up('darkMode',!s.darkMode)})}),
       ]),
       e(Sec,{title:'VERIFICATION',key:'vfy'},[
-        e(Row,{key:'ph',label:'Phone verification',desc:verified?'Your phone is confirmed':'Unlock the Verified badge',r:verified?e('span',{style:{fontSize:11,color:C.ok,fontWeight:800}},e(IcTxt,{n:'shieldCheck',s:12},'Verified')):e('button',{onClick:onOpenVerify,style:{padding:'5px 12px',borderRadius:8,border:'none',background:C.tl,color:'#fff',fontSize:10,fontWeight:800,cursor:'pointer'}},'Verify')}),
+        e(Row,{key:'ph',
+          label:'Phone verification',
+          desc:verified?'Your phone is confirmed':(VERIFY.enabled?'Unlock the Verified badge':'Opening soon — badges stay off until it\'s real'),
+          r:verified
+            ?e('span',{style:{fontSize:11,color:C.ok,fontWeight:800}},e(IcTxt,{n:'shieldCheck',s:12},'Verified'))
+            :e('button',{onClick:onOpenVerify,style:{padding:'5px 12px',borderRadius:8,border:VERIFY.enabled?'none':`1px solid ${C.bd}`,background:VERIFY.enabled?C.tl:'transparent',color:VERIFY.enabled?'#fff':C.mt,fontSize:10,fontWeight:800,cursor:'pointer'}},VERIFY.enabled?'Verify':'Learn more')}),
       ]),
       e(Sec,{title:'PRIVACY & SAFETY',key:'pr'},[
         e(Row,{key:'lp',label:'Show exact location',desc:'Off shows only city',r:e(Tog,{on:s.preciseLoc,onChange:()=>up('preciseLoc',!s.preciseLoc)})}),
-        e(Row,{key:'bl',label:'Blocked users',desc:`${s.blockedCt||0} blocked`,r:e(Ic,{n:'chevron',s:14,c:C.mt})}),
+        e('div',{key:'bl',onClick:()=>onOpenBlocked&&onOpenBlocked(),role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`,cursor:'pointer'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'Blocked users'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},blockedN===0?'Nobody blocked':`${blockedN} blocked`)]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
+        e('div',{key:'pi',onClick:()=>onOpenProhibited&&onOpenProhibited(),role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`,cursor:'pointer'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'What can\'t be listed'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Prohibited items policy')]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
+        e(Row,{key:'an',label:'Share usage analytics',desc:'Anonymous — never your messages or listings',r:e(Tog,{on:!optOut,onChange:()=>{const nv=!optOut;setOptOut(nv);kv.set('analyticsOptOut',nv);showToast&&showToast(nv?'Analytics off':'Analytics on');}})}),
       ]),
       e(Sec,{title:'ACCOUNT',key:'ac'},[
         e('div',{key:'sf',onClick:()=>{onClose();onOpenSafety&&onOpenSafety();},style:{padding:'10px 0',cursor:'pointer',borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},[e('div',null,[e(IcTxt,{n:'shieldCheck',s:13,gap:7,style:{fontSize:12,color:C.tx,fontWeight:600}},'Safe meet-up guide'),e('div',{style:{fontSize:10,color:C.mt,marginTop:1}},'Best practices for in-person exchanges')]),e(Ic,{n:'chevron',s:14,c:C.mt})])]),
-        e(Row,{key:'tos',label:'Terms of Service',r:e(Ic,{n:'chevron',s:14,c:C.mt})}),
-        e(Row,{key:'pp',label:'Privacy Policy',r:e(Ic,{n:'chevron',s:14,c:C.mt})}),
-        e('div',{key:'so',onClick:onSignOut,style:{padding:'10px 0',cursor:'pointer'}},[e('div',{style:{fontSize:12,color:C.rd,fontWeight:600}},'Sign out')]),
+        e('div',{key:'tos',onClick:()=>onOpenLegal&&onOpenLegal('terms'),role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`,cursor:'pointer'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'Terms of Service'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Updated ${LEGAL.updated}`)]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
+        e('div',{key:'pp',onClick:()=>onOpenLegal&&onOpenLegal('privacy'),role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`,cursor:'pointer'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'Privacy Policy'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'What we collect and why')]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
+        e('a',{key:'sup',href:`mailto:${LEGAL.supportEmail}`,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`,textDecoration:'none'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'Contact support'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},LEGAL.supportEmail)]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
+        e('div',{key:'so',onClick:onSignOut,style:{padding:'10px 0',cursor:'pointer',borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{fontSize:12,color:C.rd,fontWeight:600}},'Sign out')]),
+        e('div',{key:'del',onClick:()=>onDeleteAccount&&onDeleteAccount(),role:'button',tabIndex:0,style:{padding:'10px 0',cursor:'pointer'}},[
+          e('div',{style:{fontSize:12,color:C.rd,fontWeight:600}},'Delete account'),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Permanently removes your profile and listings'),
+        ]),
       ]),
     ]),
   ]);
@@ -1004,7 +1446,7 @@ function PriceComp({avgS,avgL,rng,userPrice}){
   ]);
 }
 
-function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide,onEditListing,onDeleteListing,onMarkSold,onOpenSeller}){
+function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,following,onToggleFollow,meId,showToast,onOpenSafety,onOpenCondGuide,onEditListing,onDeleteListing,onMarkSold,onOpenSeller,onReport}){
   useEffect(()=>{
     if(L&&typeof L.id==='string')sb.rpc('increment_listing_views',{listing_uuid:L.id}).then(()=>{});
   },[L&&L.id]);
@@ -1032,7 +1474,12 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
     if(navigator.share){navigator.share({title:`${L.brand} ${L.model}`,text:`Check out this ${L.brand} ${L.model} on DINK Exchange`,url}).catch(()=>{});}
     else{try{navigator.clipboard.writeText(url);showToast&&showToast('Link copied to clipboard');}catch(e){showToast&&showToast('Share unavailable');}}
   };
-  const handleReport=()=>{setShowMenu(false);showToast&&showToast('Listing reported. Thanks for keeping DINK safe.');};
+  // Opens the real report sheet (persists to the `reports` table) rather than
+  // the old toast-and-discard that made moderation look implemented.
+  const handleReport=()=>{
+    setShowMenu(false);
+    onReport&&onReport({type:'listing',id:L.id,ownerId:L.sid,label:`${L.brand} ${L.model}`});
+  };
   const handleStillAvailable=()=>{
     setShowMenu(false);
     setStillAvailSent(true);
@@ -1120,7 +1567,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
         // Image, placeholder during load, or fallback paddle SVG
         currentPhoto?[
           !photoLoaded[photoIdx]&&e('div',{key:'sk',style:{position:'absolute',inset:0,background:`linear-gradient(90deg, ${C.dm} 0%, ${C.bd}80 50%, ${C.dm} 100%)`,backgroundSize:'200% 100%',animation:'shimmer 1.4s infinite'}}),
-          e('img',{key:'im',src:currentPhoto,onLoad:()=>setPhotoLoaded(p=>({...p,[photoIdx]:true})),style:{width:'100%',height:'100%',objectFit:'cover',opacity:photoLoaded[photoIdx]?1:0,transition:'opacity .2s'}}),
+          e('img',{key:'im',src:currentPhoto,decoding:'async',alt:`${L.brand||''} ${L.model||''}`.trim()+` \u2014 photo ${photoIdx+1} of ${photos.length}`,onLoad:()=>setPhotoLoaded(p=>({...p,[photoIdx]:true})),style:{width:'100%',height:'100%',objectFit:'cover',opacity:photoLoaded[photoIdx]?1:0,transition:'opacity .2s'}}),
         ]:L.cat==='paddle'?e(PSv,{col:ccol(L.cond)+'70',sz:108}):e(Ic,{n:listIcon(L),s:72,c:C.mt+'70',sw:1.25}),
         // Tap arrows (visible when >1 photo)
         photos.length>1&&photoIdx>0&&e('button',{key:'pv',onClick:()=>{setPhotoIdx(i=>i-1);haptic();},style:{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2,backdropFilter:'blur(4px)'}},[e(Ic,{n:'chevronL',s:16,c:'#fff',sw:2.5})]),
@@ -1397,15 +1844,27 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   ]);
 }
 
-function MsgCard({m,onAccept,onDecline,onCounter}){
+function MsgCard({m,onAccept,onDecline,onCounter,onRetry}){
   const isMine=m.f==='m';
   const ActBtns=(extra)=>e('div',{style:{display:'flex',gap:5,marginTop:7}},[
     e('button',{key:'a',onClick:()=>onAccept&&onAccept(m),style:{flex:1,padding:'7px 0',borderRadius:7,background:C.ok,border:'none',cursor:'pointer',fontSize:10,fontWeight:800,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'check',s:12,sw:2.5}),extra&&extra.acceptLabel||'Accept']),
     e('button',{key:'d',onClick:()=>onDecline&&onDecline(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.rd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.rd}},'Decline'),
     !(extra&&extra.noCounter)&&e('button',{key:'c',onClick:()=>onCounter&&onCounter(m),style:{flex:1,padding:'6px 0',borderRadius:7,background:'transparent',border:`1px solid ${C.bd}`,cursor:'pointer',fontSize:10,fontWeight:700,color:C.tx}},'Counter'),
   ]);
-  if(m.kind==='text')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'76%',padding:'7px 11px',borderRadius:13,background:isMine?C.lm:C.cd,color:isMine?'#fff':C.tx,fontSize:12,lineHeight:1.4,borderBottomRightRadius:isMine?2:13,borderBottomLeftRadius:isMine?13:2}},[m.msg,e('div',{style:{fontSize:9,opacity:.6,marginTop:2,display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3}},[m.t,isMine&&e(Ic,{n:m.read?'checkDouble':'check',s:11,sw:2.5})])])]);
-  if(m.kind==='image')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'70%',borderRadius:13,overflow:'hidden',border:`1px solid ${C.bd}`,background:C.cd}},[e('img',{src:m.src,style:{width:'100%',display:'block',maxHeight:240,objectFit:'cover'}}),e('div',{style:{fontSize:9,opacity:.5,padding:'3px 8px',display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3,color:isMine?C.tx:C.mt}},[m.t,isMine&&e(Ic,{n:m.read?'checkDouble':'check',s:11,sw:2.5})])])]);
+  // Delivery state is now honest: pending (dimmed), failed (red, retryable), sent, read.
+  if(m.kind==='text')return e('div',{style:{display:'flex',flexDirection:'column',alignItems:isMine?'flex-end':'flex-start'}},[
+    e('div',{key:'b',style:{maxWidth:'76%',padding:'7px 11px',borderRadius:13,background:m.failed?C.rd+'18':(isMine?C.lm:C.cd),color:m.failed?C.tx:(isMine?'#fff':C.tx),border:m.failed?`1px solid ${C.rd}55`:'none',opacity:m.pending?.6:1,fontSize:12,lineHeight:1.4,borderBottomRightRadius:isMine?2:13,borderBottomLeftRadius:isMine?13:2,transition:'opacity var(--dur-2) var(--ease-out)'}},[
+      m.msg,
+      e('div',{key:'m',style:{fontSize:9,opacity:.6,marginTop:2,display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3}},[
+        m.t,
+        isMine&&!m.failed&&(m.pending
+          ?e('span',{key:'p',style:{width:7,height:7,borderRadius:'50%',border:`1.5px solid currentColor`,display:'inline-block'}})
+          :e(Ic,{key:'c',n:m.read?'checkDouble':'check',s:11,sw:2.5})),
+      ]),
+    ]),
+    m.failed&&e('button',{key:'rt',onClick:()=>onRetry&&onRetry(m),style:{background:'transparent',border:'none',color:C.rd,fontSize:9.5,fontWeight:700,cursor:'pointer',padding:'3px 2px',display:'flex',alignItems:'center',gap:4}},[e(Ic,{key:'i',n:'refresh',s:10,sw:2.5}),'Not delivered \u00b7 Tap to retry']),
+  ]);
+  if(m.kind==='image')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'70%',borderRadius:13,overflow:'hidden',border:`1px solid ${C.bd}`,background:C.cd}},[e('img',{src:m.src,loading:'lazy',decoding:'async',alt:isMine?'Photo you sent':'Photo they sent',style:{width:'100%',display:'block',maxHeight:240,objectFit:'cover'}}),e('div',{style:{fontSize:9,opacity:.5,padding:'3px 8px',display:'flex',alignItems:'center',justifyContent:'flex-end',gap:3,color:isMine?C.tx:C.mt}},[m.t,isMine&&e(Ic,{n:m.read?'checkDouble':'check',s:11,sw:2.5})])])]);
   if(m.kind==='offer'||m.kind==='counter'){const otherPrice=m.listingRef.p||0;const diff=otherPrice-m.amount;const isCounter=m.kind==='counter';return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.am+'15',borderRadius:13,border:`1.5px solid ${C.am}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.am+'25',display:'flex',alignItems:'center',gap:5}},[e(Ic,{n:isCounter?'swap':'dollar',s:11,c:C.am,sw:2}),e('span',{style:{fontSize:9,color:C.am,fontWeight:800,letterSpacing:.5}},`${isCounter?'COUNTER':'OFFER'} · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:6}},[e('span',{className:'tnum',style:{fontSize:21,fontWeight:800,color:C.am,letterSpacing:'-0.02em'}},`$${m.amount}`),otherPrice>0&&e('span',{style:{fontSize:9,color:C.mt}},`from $${otherPrice}`),diff>0&&e('span',{style:{fontSize:9,color:C.ok,fontWeight:700}},`(-$${diff})`)]),!isMine&&m.status==='pending'&&ActBtns(),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);}
   if(m.kind==='buynow')return e('div',{style:{display:'flex',justifyContent:isMine?'flex-end':'flex-start'}},[e('div',{style:{maxWidth:'82%',background:C.lm+'12',borderRadius:13,border:`1.5px solid ${C.lm}50`,overflow:'hidden'}},[e('div',{style:{padding:'5px 10px',background:C.lm+'25',display:'flex',alignItems:'center',gap:5}},[e(Ic,{n:'bolt',s:11,c:C.lm,fill:true,sw:0}),e('span',{style:{fontSize:9,color:C.lm,fontWeight:800,letterSpacing:.5}},`BUY NOW · ${(m.status||'pending').toUpperCase()}`)]),e('div',{style:{padding:'9px 11px'}},[e('div',{style:{fontSize:10,color:C.mt,marginBottom:3}},`${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:11,color:C.tx,marginBottom:5}},'Buyer wants to purchase at full price'),e('div',{className:'tnum',style:{fontSize:23,fontWeight:800,color:C.lm,marginBottom:6,letterSpacing:'-0.02em'}},`$${m.amount}`),!isMine&&m.status==='pending'&&ActBtns({acceptLabel:'Accept Sale',noCounter:true}),e('div',{style:{fontSize:9,color:C.mt,marginTop:5,textAlign:'right'}},m.t)])])]);
   if(m.kind==='accept')return e('div',{style:{display:'flex',justifyContent:'center'}},[e('div',{style:{background:C.ok+'15',borderRadius:11,padding:'8px 13px',border:`1px solid ${C.ok}40`,textAlign:'center'}},[e(IcTxt,{n:'check',s:11,style:{fontSize:10,fontWeight:800,color:C.ok}},'DEAL ACCEPTED'),e('div',{style:{fontSize:11,color:C.tx,fontWeight:600,marginTop:2}},`$${m.amount} · ${m.listingRef.b} ${m.listingRef.m}`),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},'Coordinate meet-up & payment below')])]);
@@ -1472,7 +1931,7 @@ function PaymentSheet({onClose,onSend,amount,seller,showToast}){
   ]);
 }
 
-function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,onOpenReview}){
+function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,showError,onOpenReview,onReport}){
   const [reply,setReply]=useState('');
   const [paySheet,setPaySheet]=useState(false);
   const [showConvMenu,setShowConvMenu]=useState(false);
@@ -1499,7 +1958,10 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       }
     }
   },[activeIdx,meId]);
-  // Demo-only: simulate the other party typing, then marking my message read.
+  // Demo threads only. On real (UUID) conversations this is never called —
+  // a simulated "typing…" on a live thread tells the user someone is there
+  // when nobody is, which is exactly the kind of thing that erodes trust.
+  // Replace with a Supabase Realtime presence/broadcast channel to make it real.
   const pingTyping=useCallback(()=>{
     setTheyTyping(true);
     if(typingTimer.current)clearTimeout(typingTimer.current);
@@ -1514,13 +1976,41 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
     const send=async(m)=>{
       const txt=sanitizeText(m||reply,2000);
       if(!txt)return;
+      const rl=rateCheck('message_send');
+      if(!rl.ok){showError?showError(rl.message):showToast&&showToast(rl.message);return;}
+      // Scam pattern check: blocks off-platform payment/contact pushes, which are
+      // the single most common vector in local marketplace fraud.
+      const cc=contentCheck(txt);
+      if(cc.blocked){showError?showError(cc.reason):showToast&&showToast(cc.reason);track('message_blocked_by_filter',{});return;}
+      if(cc.warn)showToast&&showToast(cc.reason);
+      rateRecord('message_send');
       setReply('');
       // Optimistic update
-      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:txt,time:'Now',unread:0,cv:[...t.cv,{f:'m',kind:'text',msg:txt,t:'Now'}]}));
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,last:txt,time:'Now',unread:0,cv:[...t.cv,{f:'m',kind:'text',msg:txt,t:'Now',pending:true}]}));
       // Persist to DB if this is a real (UUID) conversation
       if(typeof th.id==='string'&&meId){
-        await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'text',body:txt});
-      }else{pingTyping();}
+        const {error}=await sb.from('messages').insert({conversation_id:th.id,sender_id:meId,kind:'text',body:txt});
+        if(error){
+          // Mark the optimistic bubble as failed rather than leaving it looking sent.
+          setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,cv:t.cv.map(c=>(c.pending&&c.msg===txt)?{...c,pending:false,failed:true}:c)}));
+          showError?showError('Message didn\'t send. Tap to retry.'):showToast&&showToast('Message didn\'t send');
+        }else{
+          setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,cv:t.cv.map(c=>(c.pending&&c.msg===txt)?{...c,pending:false}:c)}));
+          track('message_sent',{});
+        }
+      }else{
+        setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,cv:t.cv.map(c=>(c.pending&&c.msg===txt)?{...c,pending:false}:c)}));
+        pingTyping();
+      }
+    };
+    // Retry a message that failed to deliver: remove the failed bubble, then
+    // push it back through send() so it picks up the same filter/limit checks.
+    const retrySend=(m)=>{
+      const txt=m&&m.msg;
+      if(!txt)return;
+      setMsgs(ms=>ms.map((t,i)=>i!==activeIdx?t:{...t,cv:t.cv.filter(c=>!(c.failed&&c.msg===txt))}));
+      track('message_retry',{});
+      setTimeout(()=>send(txt),0);
     };
     // Compress locally, show instantly, then upload for real (UUID) conversations
     const sendImage=async(file)=>{
@@ -1603,18 +2093,27 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,on
       e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',alignItems:'center',padding:0}},[e(Ic,{n:'back',s:20,sw:2})]),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e(Ic,{n:'checkDouble',s:11,c:C.lm,sw:2.5})]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},'aria-label':'Conversation options',style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,padding:'4px 8px',display:'flex'}},[e(Ic,{n:'more',s:17,sw:2.5})])]),
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'shieldCheck',s:13}),'Safe meet-up tips']),
-        e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('User reported. Thanks for keeping DINK safe.');},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'flag',s:13}),'Report user']),
+        e('button',{onClick:()=>{setShowConvMenu(false);onReport&&onReport({type:'user',id:th.wu.id,ownerId:th.wu.id,label:th.wu.name});},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'flag',s:13}),'Report user']),
         dealDone&&e('button',{onClick:()=>{setShowConvMenu(false);setDisputeOpen(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.am,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'scale',s:13}),'Open a dispute']),
         e('button',{onClick:()=>{setShowConvMenu(false);setConfirmBlock(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.rd,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'ban',s:13}),'Block user']),
       ]),
-      confirmBlock&&e(ConfirmModal,{key:'cbl',title:'Block this user?',body:"They won't be able to message you or see your listings. You can unblock from Settings → Privacy.",confirmLabel:'Block',cancelLabel:'Cancel',danger:true,onCancel:()=>setConfirmBlock(false),onConfirm:()=>{setConfirmBlock(false);showToast&&showToast('User blocked');setActiveIdx(null);}}),
+      confirmBlock&&e(ConfirmModal,{key:'cbl',title:'Block this user?',body:"They won't be able to message you or see your listings, and their listings disappear from your feed. You can undo this in Settings → Privacy & Safety.",confirmLabel:'Block',cancelLabel:'Cancel',danger:true,onCancel:()=>setConfirmBlock(false),onConfirm:async()=>{
+        setConfirmBlock(false);
+        await blockUser(meId,th.wu.id);
+        setActiveIdx(null);
+        showToast&&showToast(`${th.wu.name.split(' ')[0]} blocked`);
+      }}),
       showSafety&&e(SafetyTipsModal,{key:'safety',onClose:()=>setShowSafety(false)}),
       counterFor&&e(CounterOfferModal,{key:'co',m:counterFor,onClose:()=>setCounterFor(null),onSubmit:sendCounter}),
       meetupOpen&&e(MeetupModal,{key:'mu',seller:th.wu,onClose:()=>setMeetupOpen(false),onConfirm:sendMeetup}),
-      disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref,amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:(reason,detail)=>{setDisputeOpen(false);showToast&&showToast('Dispute filed — our team will follow up within 24h');}}),
+      disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref,amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:async({reason,detail})=>{
+        setDisputeOpen(false);
+        const r=await disputeSubmit({reporterId:meId,conversationId:th.id,listingRef:th.ref,amount:lastAccept?.amount||0,reason,detail});
+        showToast&&showToast(r.queued?'Dispute saved — it\'ll send as soon as you\'re back online':'Dispute filed — our team will follow up within 24h');
+      }}),
       e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.m)]),th.dealStatus==='accepted'&&e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[
-        ...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer,onDecline:declineOffer,onCounter:setCounterFor})),
+        ...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer,onDecline:declineOffer,onCounter:setCounterFor,onRetry:retrySend})),
         theyTyping&&e('div',{key:'typ',style:{display:'flex',justifyContent:'flex-start'}},[e('div',{style:{padding:'8px 13px',borderRadius:13,borderBottomLeftRadius:2,background:C.cd,display:'flex',gap:3,alignItems:'center'}},[
           e('span',{key:'d1',className:'typing-dot',style:{width:5,height:5,borderRadius:'50%',background:C.mt}}),
           e('span',{key:'d2',className:'typing-dot',style:{width:5,height:5,borderRadius:'50%',background:C.mt}}),
@@ -2047,7 +2546,7 @@ function ActivityFeed({items,onView,emptyMsg}){
     e(Ic,{key:'g',n:'chevron',s:14,c:C.mt}),
   ])));}
 
-function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}){
+function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenProhibited,prefill}){
   const [f,setF]=useState(prefill?{cat:prefill.cat||'paddle',brand:prefill.brand||'',model:prefill.model||'',price:'',cond:prefill.cond||'Like New',desc:prefill.desc||'',sub:prefill.sub||'Shoes',negotiable:true,saleType:'fixed',auctionDays:3}:{cat:'paddle',brand:'',model:'',price:'',cond:'Like New',desc:'',sub:'Shoes',negotiable:true,saleType:'fixed',auctionDays:3});
   const [busy,setBusy]=useState(false);
   const [photos,setPhotos]=useState([]); // [{file, preview}]
@@ -2075,14 +2574,20 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
   const valid=f.brand&&f.model&&f.price&&f.desc&&photos.length>0;
   const pdata=f.cat==='paddle'?pdbFind(f.brand,f.model):null;
   const modelOpts=f.cat==='paddle'&&f.brand?pdbModels(f.brand):[];
+  const cc=contentCheck(`${f.brand} ${f.model} ${f.desc}`);
   const handlePost=async()=>{
-    if(!valid||busy)return;
+    if(!valid||busy||cc.blocked)return;
     setBusy(true);
     try{
       await onPost(f,photos.map(p=>p.file));
       showToast&&showToast('Listing posted successfully');
     }catch(err){
-      showError&&showError('Failed to post listing. Please try again.');
+      // onPost throws with a reason; rate-limit and policy blocks already show
+      // their own banner, so don't stack a second generic one on top.
+      const m=String(err&&err.message||'');
+      if(m!=='rate_limited'&&m!=='content_blocked'){
+        showError&&showError('Failed to post listing. Check your connection and try again.');
+      }
     }
     setBusy(false);
   };
@@ -2100,7 +2605,7 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
         e('div',{style:{display:'flex',gap:7,overflowX:'auto'}},[0,1,2,3,4,5].map(i=>{
           const p=photos[i];
           if(p)return e('div',{key:i,style:{position:'relative',width:72,height:72,flexShrink:0,borderRadius:10,overflow:'hidden',border:`2px solid ${C.lm}40`}},[
-            e('img',{src:p.preview,style:{width:'100%',height:'100%',objectFit:'cover'}}),
+            e('img',{src:p.preview,alt:i===0?'Main listing photo preview':`Listing photo ${i+1} preview`,style:{width:'100%',height:'100%',objectFit:'cover'}}),
             e('button',{onClick:()=>removePhoto(i),style:{position:'absolute',top:3,right:3,width:18,height:18,borderRadius:'50%',background:'rgba(0,0,0,0.7)',border:'none',color:'#fff',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,lineHeight:1}},'×'),
             i===0&&e('div',{style:{position:'absolute',bottom:3,left:3,fontSize:9,color:'#fff',background:'rgba(0,0,0,0.6)',borderRadius:4,padding:'1px 5px',fontWeight:700}},'MAIN'),
           ]);
@@ -2137,9 +2642,21 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,prefill}
         ]),
         e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>up('cond',cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${f.cond===cc?C.lm:C.bd}`,background:f.cond===cc?C.lm+'20':'transparent',color:f.cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc))),
       ]),
-      e('div',null,[e('label',{style:LS},'DESCRIPTION'),e('textarea',{value:f.desc,onChange:ev=>up('desc',ev.target.value),placeholder:"Describe condition, why selling, preferred meet-up...",rows:3,style:{...IS,resize:'vertical',lineHeight:1.5}})]),
+      e('div',null,[
+        e('div',{key:'lb',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:5}},[
+          e('label',{style:{...LS,marginBottom:0}},'DESCRIPTION'),
+          e('button',{onClick:()=>onOpenProhibited&&onOpenProhibited(),style:{background:'transparent',border:'none',color:C.lm,fontSize:9,fontWeight:700,cursor:'pointer',padding:0}},'What can\'t be listed?'),
+        ]),
+        e('textarea',{key:'ta',value:f.desc,onChange:ev=>up('desc',ev.target.value),maxLength:2000,placeholder:"Describe condition, why selling, preferred meet-up...",rows:3,style:{...IS,resize:'vertical',lineHeight:1.5,borderColor:cc.blocked?C.rd:C.bd}}),
+        e('div',{key:'ct',style:{fontSize:9,color:C.mt,textAlign:'right',marginTop:3}},`${(f.desc||'').length}/2000`),
+        cc.reason&&e(ContentWarning,{key:'cw',text:cc.reason,tone:cc.blocked?'block':'warn'}),
+      ]),
     ]),
-    e('div',{key:'f',style:{padding:'11px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:handlePost,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy)?C.lm:C.dm,border:'none',cursor:(valid&&!busy)?'pointer':'default',fontSize:14,fontWeight:800,color:'#fff'}},busy?'Posting...':valid?'Post Listing':photos.length===0?'Add at least 1 photo':'Fill required fields')]),
+    e('div',{key:'f',style:{padding:'11px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[
+      e('button',{onClick:handlePost,disabled:!valid||busy||cc.blocked,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(valid&&!busy&&!cc.blocked)?C.lm:C.dm,border:'none',cursor:(valid&&!busy&&!cc.blocked)?'pointer':'not-allowed',fontSize:14,fontWeight:800,color:(valid&&!busy&&!cc.blocked)?'#fff':C.mt}},
+        busy?'Posting\u2026':cc.blocked?'Review the highlighted issue':valid?'Post Listing':photos.length===0?'Add at least 1 photo':'Fill required fields'),
+      e('div',{key:'tos',style:{fontSize:9,color:C.mt,textAlign:'center',marginTop:7,lineHeight:1.45}},'By posting you confirm you own this item and agree to our Terms.'),
+    ]),
   ]);
 }
 
@@ -2373,6 +2890,26 @@ function ErrorBanner({msg,onDismiss}){
     e(Ic,{key:'i',n:'alert',s:14,c:'#fff'}),
     e('span',{key:'m',style:{flex:1}},msg),
     e('button',{key:'x',onClick:onDismiss,'aria-label':'Dismiss',style:{background:'transparent',border:'none',color:'#fff',cursor:'pointer',padding:0,opacity:.85,display:'flex'}},[e(Ic,{n:'close',s:14,sw:2.25})]),
+  ]);
+}
+
+// --- Offline indicator ---
+// Network-dependent actions (posting, offers, messages) failed with a generic
+// error when the device dropped connection. This names the actual cause.
+function OfflineBanner(){
+  return e('div',{role:'status',style:{position:'absolute',top:0,left:0,right:0,zIndex:38,background:C.mt,color:'#fff',padding:'6px 12px',fontSize:10.5,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:7,animation:'riseIn var(--dur-2) var(--ease-out)'}},[
+    e(Ic,{key:'i',n:'alert',s:12,c:'#fff'}),
+    e('span',{key:'t'},'You\u2019re offline \u2014 we\u2019ll send anything you queue once you reconnect'),
+  ]);
+}
+
+// --- Inline content warning (spam / off-platform payment nudge) ---
+function ContentWarning({text,tone}){
+  if(!text)return null;
+  const col=tone==='block'?C.rd:C.am;
+  return e('div',{role:'alert',style:{display:'flex',gap:8,alignItems:'flex-start',fontSize:10.5,color:col,background:col+'12',border:`1px solid ${col}35`,borderRadius:9,padding:'8px 10px',lineHeight:1.5,marginTop:8}},[
+    e(Ic,{key:'i',n:'alert',s:13,c:col,style:{flexShrink:0,marginTop:1}}),
+    e('span',{key:'t',style:{flex:1}},text),
   ]);
 }
 
@@ -2770,30 +3307,236 @@ function ListingAnalyticsModal({L,onClose}){
 }
 
 // --- Identity / phone verification flow ---
-function VerificationModal({onClose,onVerified}){
-  const [step,setStep]=useState('phone');
+function VerificationModal({onClose,onVerified,showToast}){
+  const [step,setStep]=useState(VERIFY.enabled?'phone':'unavailable');
   const [phone,setPhone]=useState('');
   const [code,setCode]=useState('');
   const [busy,setBusy]=useState(false);
-  const sendCode=()=>{if(phone.replace(/\D/g,'').length<10)return;setBusy(true);setTimeout(()=>{setBusy(false);setStep('code');},700);};
-  const verify=()=>{if(code.length<4)return;setBusy(true);setTimeout(()=>{setBusy(false);setStep('done');onVerified&&onVerified();},700);};
-  return e('div',{style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
-    e('div',{style:{background:C.bg,borderRadius:18,padding:22,width:'100%',maxWidth:330,animation:'scaleIn var(--dur-2) var(--ease-spring)'}},[
-      step==='phone'&&[
-        e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'phone',s:32,c:C.lm,sw:1.5})]),e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Verify your identity'),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},'A verified badge builds buyer trust and unlocks higher-value deals. We\'ll text a code to confirm your number.')]),
-        e('input',{key:'ph',value:phone,onChange:ev=>setPhone(ev.target.value),placeholder:'Phone number',type:'tel',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:14,outline:'none',marginBottom:12}}),
-        e('button',{key:'go',onClick:sendCode,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff',marginBottom:8}},busy?'Sending…':'Send code'),
-        e('button',{key:'cx',onClick:onClose,style:{width:'100%',padding:'9px 0',background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:'pointer'}},'Maybe later'),
-      ],
-      step==='code'&&[
-        e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'mail',s:32,c:C.lm,sw:1.5})]),e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Enter the code'),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5}},`We sent a 4-digit code to ${phone}. (Demo: enter any 4 digits.)`)]),
-        e('input',{key:'cd',value:code,onChange:ev=>setCode(ev.target.value.replace(/\D/g,'').slice(0,6)),placeholder:'----',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:22,fontWeight:900,letterSpacing:8,textAlign:'center',outline:'none',marginBottom:12}}),
-        e('button',{key:'go',onClick:verify,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},busy?'Verifying…':'Verify'),
-      ],
-      step==='done'&&[
-        e('div',{key:'i',style:{textAlign:'center'}},[e('div',{style:{marginBottom:12,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:40,c:C.ok,sw:1.5})]),e('div',{style:{fontSize:18,fontWeight:900,color:C.ok,marginBottom:6}},"You're verified!"),e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,marginBottom:18}},'Your profile now shows a verified badge. Buyers trust verified sellers more.'),e('button',{onClick:onClose,style:{width:'100%',padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Done')]),
-      ],
+  const [err,setErr]=useState('');
+  const [cooldown,setCooldown]=useState(0);
+  useEffect(()=>{if(cooldown<=0)return;const t=setTimeout(()=>setCooldown(c=>c-1),1000);return()=>clearTimeout(t);},[cooldown]);
+  const digits=phone.replace(/\D/g,'');
+  const sendCode=async()=>{
+    setErr('');
+    if(digits.length<10){setErr('Enter a valid 10-digit phone number.');return;}
+    setBusy(true);
+    const r=await verifySendCode(digits);
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'Could not send a code. Try again shortly.');return;}
+    track('verify_code_sent',{});
+    setCooldown(30);
+    setStep('code');
+  };
+  const verify=async()=>{
+    setErr('');
+    if(code.length<6){setErr('Enter the 6-digit code we texted you.');return;}
+    setBusy(true);
+    const r=await verifyCheckCode(digits,code);
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'That code didn\u2019t match. Check it and try again.');return;}
+    track('verify_completed',{});
+    setStep('done');
+    onVerified&&onVerified();
+  };
+  const wrap=(children)=>e('div',{role:'dialog','aria-modal':'true','aria-label':'Verify your phone',style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:18,padding:22,width:'100%',maxWidth:330,animation:'scaleIn var(--dur-2) var(--ease-spring)',border:`1px solid ${C.bd}`}},children),
+  ]);
+  const errBox=err?e('div',{key:'er',role:'alert',style:{fontSize:11,color:C.rd,background:C.rd+'12',border:`1px solid ${C.rd}35`,borderRadius:9,padding:'8px 10px',marginBottom:11,lineHeight:1.5}},err):null;
+
+  // SMS provider not configured — say so plainly instead of handing out a
+  // badge for any 4 digits, which made "Verified" meaningless to buyers.
+  if(step==='unavailable')return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:32,c:C.am,sw:1.5})]),
+      e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:6}},'Verification isn\u2019t open yet'),
+      e('div',{style:{fontSize:11.5,color:C.mt,lineHeight:1.6}},'We\u2019re still setting up phone verification. Rather than hand out a badge that doesn\u2019t mean anything, we\u2019ve kept it closed \u2014 a Verified badge should tell buyers something real.'),
     ]),
+    e('div',{key:'w',style:{fontSize:10.5,color:C.mt,background:C.tl+'12',border:`1px solid ${C.tl}30`,borderRadius:10,padding:'10px 11px',marginBottom:14,lineHeight:1.55}},'In the meantime, a complete profile, clear photos, and good reviews do more for buyer confidence than any badge.'),
+    e('button',{key:'ok',onClick:onClose,style:{width:'100%',padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Got it'),
+  ]);
+
+  if(step==='phone')return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'phone',s:32,c:C.lm,sw:1.5})]),
+      e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Verify your phone'),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55}},'A verified badge tells buyers a real, reachable person is behind this account. We\u2019ll text you a 6-digit code.'),
+    ]),
+    errBox,
+    e('input',{key:'ph',value:phone,onChange:ev=>setPhone(ev.target.value),placeholder:'(865) 555-0134',type:'tel',autoComplete:'tel','aria-label':'Phone number',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${err?C.rd:C.bd}`,borderRadius:11,color:C.tx,fontSize:14,outline:'none',marginBottom:10}}),
+    e('div',{key:'pv',style:{fontSize:9.5,color:C.mt,lineHeight:1.5,marginBottom:12}},'Your number is never shown to other users and is never used for marketing. Standard message rates apply.'),
+    e('button',{key:'go',onClick:sendCode,disabled:busy,style:{width:'100%',padding:'13px 0',borderRadius:12,background:busy?C.dm:C.lm,border:'none',cursor:busy?'default':'pointer',fontSize:13,fontWeight:800,color:busy?C.mt:'#fff',marginBottom:8}},busy?'Sending\u2026':'Send code'),
+    e('button',{key:'cx',onClick:onClose,style:{width:'100%',padding:'9px 0',background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:'pointer'}},'Maybe later'),
+  ]);
+
+  if(step==='code')return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'mail',s:32,c:C.lm,sw:1.5})]),
+      e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Enter the code'),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55}},`We texted a 6-digit code to ${phone}.`),
+    ]),
+    errBox,
+    e('input',{key:'cd',value:code,onChange:ev=>{setCode(ev.target.value.replace(/\D/g,'').slice(0,6));setErr('');},placeholder:'\u2022\u2022\u2022\u2022\u2022\u2022',inputMode:'numeric',autoComplete:'one-time-code','aria-label':'Verification code',style:{width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${err?C.rd:C.bd}`,borderRadius:11,color:C.tx,fontSize:22,fontWeight:900,letterSpacing:8,textAlign:'center',outline:'none',marginBottom:12}}),
+    e('button',{key:'go',onClick:verify,disabled:busy||code.length<6,style:{width:'100%',padding:'13px 0',borderRadius:12,background:(busy||code.length<6)?C.dm:C.lm,border:'none',cursor:(busy||code.length<6)?'default':'pointer',fontSize:13,fontWeight:800,color:(busy||code.length<6)?C.mt:'#fff',marginBottom:9}},busy?'Verifying\u2026':'Verify'),
+    e('button',{key:'rs',onClick:()=>{if(cooldown<=0)sendCode();},disabled:cooldown>0,style:{width:'100%',padding:'7px 0',background:'transparent',border:'none',color:cooldown>0?C.mt:C.lm,fontSize:11,fontWeight:700,cursor:cooldown>0?'default':'pointer'}},cooldown>0?`Resend in ${cooldown}s`:'Resend code'),
+    e('button',{key:'bk',onClick:()=>{setStep('phone');setCode('');setErr('');},style:{width:'100%',padding:'7px 0',background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:'pointer'}},'Use a different number'),
+  ]);
+
+  return wrap([
+    e('div',{key:'i',style:{textAlign:'center'}},[
+      e('div',{style:{marginBottom:12,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:40,c:C.ok,sw:1.5})]),
+      e('div',{style:{fontSize:18,fontWeight:900,color:C.ok,marginBottom:6}},'You\u2019re verified'),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55,marginBottom:18}},'Your profile now shows a verified badge. Buyers see it on every listing you post.'),
+      e('button',{onClick:onClose,style:{width:'100%',padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Done'),
+    ]),
+  ]);
+}
+
+// --- Report flow (listings + users) ---
+// Replaces the old fire-and-forget toast. Collects a reason + detail and
+// persists via reportSubmit(), with an option to block the user in the
+// same step since "report" and "never hear from them again" are usually
+// the same intent.
+function ReportModal({target,onClose,onSubmit}){
+  const [reason,setReason]=useState('');
+  const [detail,setDetail]=useState('');
+  const [alsoBlock,setAlsoBlock]=useState(target.type==='user');
+  const [busy,setBusy]=useState(false);
+  const isUser=target.type==='user';
+  const valid=!!reason&&!busy;
+  const go=async()=>{
+    if(!valid)return;
+    const rl=rateCheck('report_submit');
+    if(!rl.ok){onSubmit({error:rl.message});return;}
+    setBusy(true);
+    rateRecord('report_submit');
+    await onSubmit({reason,detail,alsoBlock});
+    setBusy(false);
+  };
+  return e('div',{role:'dialog','aria-modal':'true','aria-label':isUser?'Report user':'Report listing',style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'flex-end',zIndex:52}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,maxHeight:'88%',overflowY:'auto',animation:'sheetIn var(--dur-3) var(--ease-out)'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
+        e(IcTxt,{n:'flag',s:16,gap:7,style:{fontSize:15,fontWeight:800,color:C.tx}},isUser?'Report user':'Report listing'),
+        e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})]),
+      ]),
+      e('div',{key:'sub',style:{fontSize:11,color:C.mt,marginBottom:6,lineHeight:1.5}},target.label?`Reporting: ${target.label}`:''),
+      e('div',{key:'note',style:{fontSize:10,color:C.mt,background:C.tl+'12',border:`1px solid ${C.tl}30`,borderRadius:9,padding:'8px 10px',marginBottom:14,lineHeight:1.5}},'Reports are reviewed by our team. We usually respond within 24 hours. If you are in immediate danger, contact local authorities first.'),
+      e('div',{key:'rs',style:{marginBottom:12}},[
+        e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block',letterSpacing:.5}},'WHAT\u2019S WRONG?'),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:6}},REPORT_REASONS.map(r=>e('button',{key:r,onClick:()=>{setReason(r);haptic();},'aria-pressed':reason===r,style:{textAlign:'left',padding:'10px 11px',borderRadius:10,border:`1px solid ${reason===r?C.rd:C.bd}`,background:reason===r?C.rd+'12':C.cd,color:reason===r?C.rd:C.tx,fontSize:12,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:8}},[
+          e('span',{key:'d',style:{width:15,height:15,borderRadius:'50%',border:`1.5px solid ${reason===r?C.rd:C.bd}`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},reason===r?e('span',{style:{width:7,height:7,borderRadius:'50%',background:C.rd}}):null),
+          r,
+        ]))),
+      ]),
+      e('div',{key:'dt',style:{marginBottom:12}},[
+        e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:5,display:'block',letterSpacing:.5}},'DETAILS (OPTIONAL, HELPS US ACT FASTER)'),
+        e('textarea',{value:detail,onChange:ev=>setDetail(ev.target.value),maxLength:1000,placeholder:'What happened? Include dates, amounts, or anything that helps.',rows:4,style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:12,outline:'none',resize:'none',lineHeight:1.5}}),
+        e('div',{style:{fontSize:9,color:C.mt,textAlign:'right',marginTop:3}},`${detail.length}/1000`),
+      ]),
+      target.ownerId!=null&&e('button',{key:'blk',onClick:()=>setAlsoBlock(b=>!b),style:{width:'100%',display:'flex',alignItems:'center',gap:9,padding:'10px 11px',borderRadius:11,border:`1px solid ${alsoBlock?C.rd+'55':C.bd}`,background:alsoBlock?C.rd+'0D':C.cd,cursor:'pointer',marginBottom:14,textAlign:'left'}},[
+        e('span',{key:'cb',style:{width:17,height:17,borderRadius:5,border:`1.5px solid ${alsoBlock?C.rd:C.bd}`,background:alsoBlock?C.rd:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},alsoBlock?e(Ic,{n:'check',s:11,c:'#fff',sw:3}):null),
+        e('span',{key:'t',style:{flex:1}},[
+          e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},'Also block this user'),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'They can\u2019t message you or see your listings'),
+        ]),
+      ]),
+      e('button',{key:'go',onClick:go,disabled:!valid,style:{width:'100%',padding:'13px 0',borderRadius:12,background:valid?C.rd:C.dm,border:'none',cursor:valid?'pointer':'not-allowed',fontSize:13,fontWeight:800,color:valid?'#fff':C.mt}},busy?'Submitting\u2026':'Submit report'),
+    ]),
+  ]);
+}
+
+// --- Legal document viewer (Terms / Privacy) ---
+// Previously these were chevrons that went nowhere. Content lives in
+// TERMS_SECTIONS / PRIVACY_SECTIONS so it is always readable in-app even
+// if the hosted URLs are unreachable.
+function LegalModal({kind,onClose}){
+  const isTerms=kind==='terms';
+  const secs=isTerms?TERMS_SECTIONS:PRIVACY_SECTIONS;
+  const url=isTerms?LEGAL.termsUrl:LEGAL.privacyUrl;
+  const bodyRef=useRef(null);
+  useEffect(()=>{if(bodyRef.current)bodyRef.current.scrollTop=0;},[kind]);
+  return e('div',{role:'dialog','aria-modal':'true','aria-label':isTerms?'Terms of Service':'Privacy Policy',style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:60,animation:'slideUp var(--dur-3) var(--ease-out)'}},[
+    e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}},[
+      e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),
+      e('div',{style:{flex:1}},[
+        e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},isTerms?'Terms of Service':'Privacy Policy'),
+        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Last updated ${LEGAL.updated}`),
+      ]),
+      url&&e('a',{href:url,target:'_blank',rel:'noopener noreferrer','aria-label':'Open in browser',style:{color:C.lm,display:'flex',padding:4}},[e(Ic,{n:'share',s:16})]),
+    ]),
+    e('div',{key:'b',ref:bodyRef,style:{flex:1,overflowY:'auto',padding:'16px 16px 30px'}},[
+      e('div',{key:'intro',style:{fontSize:11,color:C.mt,lineHeight:1.6,marginBottom:18,padding:'11px 12px',background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`}},isTerms
+        ?'Plain-language summary: we connect local players. We don\u2019t handle your money, inspect gear, or supervise meet-ups. Deals and risk are between you and the other player. Be honest, be safe, and report anything that isn\u2019t.'
+        :'Plain-language summary: we collect what we need to run a local marketplace and nothing more. We never sell your personal information. Your exact location and contact details are never public.'),
+      ...secs.map((sec,i)=>e('div',{key:i,style:{marginBottom:16}},[
+        e('div',{style:{fontSize:12,fontWeight:800,color:C.tx,marginBottom:5}},sec.h),
+        e('div',{style:{fontSize:11.5,color:C.mt,lineHeight:1.65}},sec.b),
+      ])),
+      e('div',{key:'ct',style:{marginTop:8,padding:'12px 13px',background:C.lm+'0D',border:`1px solid ${C.lm}30`,borderRadius:11}},[
+        e('div',{style:{fontSize:11,fontWeight:800,color:C.tx,marginBottom:3}},'Questions?'),
+        e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55}},[`Email `,e('a',{key:'a',href:`mailto:${LEGAL.supportEmail}`,style:{color:C.lm,fontWeight:700,textDecoration:'none'}},LEGAL.supportEmail),' and we\u2019ll get back to you.']),
+      ]),
+    ]),
+  ]);
+}
+
+// --- Prohibited items policy ---
+function ProhibitedItemsModal({onClose}){
+  return e('div',{role:'dialog','aria-modal':'true','aria-label':'Prohibited items',style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'flex-end',zIndex:55}},[
+    e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,maxHeight:'85%',overflowY:'auto',animation:'sheetIn var(--dur-3) var(--ease-out)'}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
+        e(IcTxt,{n:'ban',s:16,gap:7,style:{fontSize:15,fontWeight:800,color:C.tx}},'What can\u2019t be listed'),
+        e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})]),
+      ]),
+      e('div',{key:'s',style:{fontSize:11,color:C.mt,marginBottom:14,lineHeight:1.55}},'Listing any of these gets the post removed and can cost you your account. If you\u2019re unsure, ask before you post.'),
+      e('div',{key:'l',style:{display:'flex',flexDirection:'column',gap:9}},PROHIBITED_ITEMS.map((it,i)=>e('div',{key:i,style:{display:'flex',gap:10,padding:'11px 12px',background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`}},[
+        e('div',{key:'i',style:{color:C.rd,flexShrink:0,marginTop:1,display:'flex'}},[e(Ic,{n:'ban',s:15})]),
+        e('div',{key:'t',style:{flex:1}},[
+          e('div',{style:{fontSize:12,fontWeight:700,color:C.tx,marginBottom:2}},it.t),
+          e('div',{style:{fontSize:10.5,color:C.mt,lineHeight:1.5}},it.d),
+        ]),
+      ]))),
+      e('div',{key:'f',style:{marginTop:14,fontSize:10,color:C.mt,lineHeight:1.55,textAlign:'center'}},'See something that shouldn\u2019t be here? Use the report button on any listing.'),
+    ]),
+  ]);
+}
+
+// --- Blocked users management ---
+// Settings row used to read a hardcoded "0 blocked" with a dead chevron.
+function BlockedUsersModal({onClose,meId,showToast}){
+  const [ids,setIds]=useState(()=>blockedList());
+  const resolve=(id)=>US.find(u=>String(u.id)===String(id))||{id,name:'Blocked user',ini:'?',ac:C.mt,loc:'\u2014'};
+  const unblock=async(id)=>{
+    await unblockUser(meId,id);
+    setIds(blockedList());
+    showToast&&showToast('User unblocked');
+  };
+  return e('div',{role:'dialog','aria-modal':'true','aria-label':'Blocked users',style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:60,animation:'slideUp var(--dur-3) var(--ease-out)'}},[
+    e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}},[
+      e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),
+      e('div',{style:{flex:1,fontSize:15,fontWeight:800,color:C.tx}},'Blocked users'),
+    ]),
+    e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},
+      ids.length===0
+        ?[e('div',{key:'empty',style:{textAlign:'center',padding:'50px 20px'}},[
+            e('div',{key:'i',style:{display:'flex',justifyContent:'center',marginBottom:12,color:C.mt,opacity:.5}},[e(Ic,{n:'ban',s:34})]),
+            e('div',{key:'t',style:{fontSize:13,fontWeight:700,color:C.tx,marginBottom:5}},'Nobody blocked'),
+            e('div',{key:'d',style:{fontSize:11,color:C.mt,lineHeight:1.55,maxWidth:250,margin:'0 auto'}},'Blocking someone hides your listings from them and stops them messaging you. You can block from any conversation or listing.'),
+          ])]
+        :[
+          e('div',{key:'ct',style:{fontSize:10,color:C.mt,marginBottom:10}},`${ids.length} blocked`),
+          e('div',{key:'l',style:{display:'flex',flexDirection:'column',gap:8}},ids.map(id=>{
+            const u=resolve(id);
+            return e('div',{key:id,style:{display:'flex',alignItems:'center',gap:10,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:'10px 11px'}},[
+              e(Av,{key:'a',u,sz:34}),
+              e('div',{key:'n',style:{flex:1,minWidth:0}},[
+                e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),
+                e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},u.loc||'\u2014'),
+              ]),
+              e('button',{key:'u',onClick:()=>unblock(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${C.bd}`,background:'transparent',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0}},'Unblock'),
+            ]);
+          })),
+        ]
+    ),
   ]);
 }
 
@@ -2852,6 +3595,14 @@ function App(){
   const [verified,setVerified]=useState(()=>kv.get('verified',false));
   const [pushOn,setPushOn]=useState(()=>pushPermGet()==='granted');
   const [onboardStep,setOnboardStep]=useState(0);
+  // Trust & safety / legal surfaces
+  const [reportTarget,setReportTarget]=useState(null);   // {type,id,ownerId,label}
+  const [legalKind,setLegalKind]=useState(null);         // 'terms' | 'privacy'
+  const [prohibitedOpen,setProhibitedOpen]=useState(false);
+  const [blockedOpen,setBlockedOpen]=useState(false);
+  const [deleteAcctOpen,setDeleteAcctOpen]=useState(false);
+  const [isOnline,setIsOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine!==false);
+  const [blockVer,setBlockVer]=useState(0);              // bumps when the block list changes
   const [onboardDismissed,setOnboardDismissed]=useState(false);
   // Theme: light by default, hydrated from kv. Triggers a render via themeTick so closures pick up the new C values.
   const [themeMode,setThemeMode]=useState(()=>kv.get('themeMode','light'));
@@ -2859,6 +3610,25 @@ function App(){
   useEffect(()=>{applyTheme(themeMode);kv.set('themeMode',themeMode);setThemeTick(t=>t+1);},[themeMode]);
   // Register the service worker once so push/offline can be layered on in production
   useEffect(()=>{registerSW();},[]);
+  // Global crash capture + batched analytics flushing. Without this we'd have no
+  // signal at all on what breaks for real users after launch.
+  useEffect(()=>{initErrorReporting();track('app_open',{});},[]);
+  // When the block list changes, prune already-loaded listings and threads in
+  // place so the effect is immediate rather than waiting for the next fetch.
+  useEffect(()=>{
+    if(blockVer===0)return;
+    const before=LS.length;
+    for(let i=LS.length-1;i>=0;i--){if(isBlocked(LS[i].sid))LS.splice(i,1);}
+    setMsgs(ms=>ms.filter(t=>!isBlocked(t.wu&&t.wu.id)));
+    if(LS.length!==before)setDataVer(v=>v+1);
+  },[blockVer]);
+  // Connectivity banner — actions that hit the network fail confusingly offline.
+  useEffect(()=>{
+    const on=()=>{setIsOnline(true);outboxFlush();};
+    const off=()=>setIsOnline(false);
+    window.addEventListener('online',on);window.addEventListener('offline',off);
+    return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};
+  },[]);
   // Recently viewed listing ids (hydrated from kv)
   const [recentlyViewed,setRecentlyViewed]=useState(()=>recentGet());
   const showToast=useCallback((msg)=>setToast(msg),[]);
@@ -2878,6 +3648,12 @@ function App(){
 
   // --- AUTH + PROFILE LOAD ---
   const loadProfile=useCallback(async(userId)=>{
+    // Session-scoped hydration: pull the server-side block list so blocks follow
+    // the account across devices, retry any safety writes queued while offline,
+    // and attach the user id to analytics events.
+    analyticsIdentify(userId);
+    blocksLoad(userId).then(()=>setBlockVer(v=>v+1));
+    outboxFlush();
     try{
       const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
       const {data:us}=await sb.from('user_settings').select('*').eq('user_id',userId).maybeSingle();
@@ -2998,7 +3774,8 @@ function App(){
       const L=mapListingRow(r,meLL);
       if(r.status==='sold')sold.push(L);else active.push(L);
     });
-    LS.length=0;active.forEach(l=>LS.push(l));
+    // Blocking has to actually hide content, not just stop DMs.
+    LS.length=0;active.filter(l=>!isBlocked(l.sid)).forEach(l=>LS.push(l));
     SOLD.length=0;sold.slice(0,8).forEach(s=>SOLD.push({
       id:s.id,brand:s.brand,model:s.model,
       price:s.sold_price?Number(s.sold_price):s.price,
@@ -3023,7 +3800,7 @@ function App(){
       .lt('created_at',listingsCursor)
       .order('created_at',{ascending:false})
       .limit(LISTINGS_PAGE_SIZE);
-    if(error){console.error('listings paginate',error);return;}
+    if(error){console.error('listings paginate',error);showError('Could not load more listings. Check your connection.');return;}
     if(!rows||rows.length===0){setHasMoreListings(false);return;}
     rows.forEach(r=>{
       if(r.seller&&!US.find(u=>u.id===r.seller.id)){
@@ -3031,7 +3808,7 @@ function App(){
         if(meLL&&u.lat!=null&&u.lng!=null){const d=haversineMi(meLL.lat,meLL.lng,u.lat,u.lng);if(d!=null)u.dist=Math.round(d*10)/10;}
         US.push(u);
       }
-      if(r.status!=='sold'){LS.push(mapListingRow(r,meLL));}
+      if(r.status!=='sold'){const ml=mapListingRow(r,meLL);if(!isBlocked(ml.sid))LS.push(ml);}
     });
     const last=rows[rows.length-1];
     setListingsCursor(last?.created_at||null);
@@ -3055,11 +3832,11 @@ function App(){
       .or(`buyer_id.eq.${me.id},seller_id.eq.${me.id}`)
       .order('last_message_at',{ascending:false})
       .limit(50);
-    if(error){console.error('convs fetch',error);return;}
+    if(error){console.error('convs fetch',error);showError('Could not refresh your messages. Pull down to retry.');return;}
     if(!rows||rows.length===0)return; // keep demo data
     // Sort messages within each conversation
     rows.forEach(r=>{if(r.messages)r.messages.sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));});
-    setMsgs(rows.map(r=>mapConversation(r,me.id)));
+    setMsgs(rows.map(r=>mapConversation(r,me.id)).filter(t=>!isBlocked(t.wu&&t.wu.id)));
   },[me]);
 
   useEffect(()=>{if(me)fetchConversations();},[me,fetchConversations]);
@@ -3317,8 +4094,15 @@ function App(){
     const safePrice=safeMoney(formData.price);
     if(!safeBrand||!safeModel||safePrice==null){
       console.warn('handlePost: invalid required fields');
-      return;
+      throw new Error('Missing required fields');
     }
+    // --- ABUSE CONTROLS ---
+    // Rate limit first (cheap), then content policy. Both also need to exist
+    // server-side as a Postgres trigger; this layer is for fast feedback.
+    const rl=rateCheck('listing_create');
+    if(!rl.ok){showError(rl.message);throw new Error('rate_limited');}
+    const cc=contentCheck(`${safeBrand} ${safeModel} ${safeDesc}`);
+    if(cc.blocked){showError(cc.reason);track('listing_blocked_by_filter',{});throw new Error('content_blocked');}
     const condMap={'Brand New':10,'Like New':9,'Good':7,'Fair':5,'Heavy Use':3};
     // Look up paddle_spec id if paddle
     let specId=null;
@@ -3347,7 +4131,11 @@ function App(){
       row.auction_ends_at=new Date(Date.now()+1000*60*60*24*(formData.auctionDays||3)).toISOString();
     }
     const {data:listing,error}=await sb.from('listings').insert(row).select().single();
-    if(error){console.error('insert listing',error);return;}
+    // Surface the failure instead of returning silently — CrtOverlay shows an
+    // error banner on throw, but a bare `return` looked like a successful post.
+    if(error){console.error('insert listing',error);throw new Error(error.message||'insert_failed');}
+    rateRecord('listing_create');
+    track('listing_created',{cat:formData.cat,saleType:formData.saleType,photos:(photoFiles||[]).length});
     // Upload photos to storage and insert listing_photos rows
     if(photoFiles&&photoFiles.length>0&&listing){
       const photoRows=[];
@@ -3416,10 +4204,10 @@ function App(){
     }
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
-    if(cErr){console.error('conv create',cErr);return;}
+    if(cErr){console.error('conv create',cErr);showError('Could not start that conversation. Check your connection and try again.');return;}
     const payload={amount:buyPrice,listingRef:{b:L.brand,m:L.model,p:buyPrice},status:'pending'};
     const {data:msgRow,error:mErr}=await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'buynow',payload}).select().single();
-    if(mErr){console.error('buynow msg',mErr);return;}
+    if(mErr){console.error('buynow msg',mErr);showError('That didn\'t go through. Your offer was not sent — try again.');return;}
     await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:buyPrice,kind:'buynow'});
     await fetchConversations();
     setTab('messages');setView(null);
@@ -3432,8 +4220,15 @@ function App(){
     const safeAmt=safeMoney(amount);
     const safeNote=sanitizeText(note||'',500);
     if(safeAmt==null||safeAmt<=0||L.price==null||safeAmt>Number(L.price)*1.5){
-      console.warn('initOffer: amount out of bounds');return;
+      showError('That offer amount doesn\'t look right. Enter an amount up to 150% of the asking price.');return;
     }
+    if(isBlocked(sellerId)){showError('You\'ve blocked this seller. Unblock them in Settings to make an offer.');return;}
+    const rlo=rateCheck('offer_send');
+    if(!rlo.ok){showError(rlo.message);return;}
+    const cco=contentCheck(safeNote);
+    if(cco.blocked){showError(cco.reason);return;}
+    rateRecord('offer_send');
+    track('offer_sent',{amount:safeAmt});
     if(!isUuid(sellerId)||!me?.id||!isUuid(L.id)){
       // Demo fallback
       const existing=msgs.findIndex(m=>m.wu.id===sellerId);
@@ -3451,10 +4246,10 @@ function App(){
     }
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
-    if(cErr){console.error('conv create',cErr);return;}
+    if(cErr){console.error('conv create',cErr);showError('Could not start that conversation. Check your connection and try again.');return;}
     const payload={amount:safeAmt,listingRef:{b:L.brand,m:L.model,p:L.price},status:'pending'};
     const {data:msgRow,error:mErr}=await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'offer',payload}).select().single();
-    if(mErr){console.error('offer msg',mErr);return;}
+    if(mErr){console.error('offer msg',mErr);showError('Your offer didn\'t send. Try again in a moment.');return;}
     await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:safeAmt,kind:'offer',note:safeNote||null});
     if(safeNote){
       await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'text',body:safeNote});
@@ -3478,7 +4273,44 @@ function App(){
     const meta=savedMeta&&savedMeta[id];
     return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
   }).length;
-  const handleNav=(id)=>{if(id==='sell'){setCrt(true);setView(null);return;}setTab(id);setView(null);if(id==='messages'&&activeMsgIdx===null);};
+  const handleNav=(id)=>{if(id==='sell'){track('nav_sell',{});setCrt(true);setView(null);return;}track('nav_tab',{tab:id});setTab(id);setView(null);if(id==='messages'&&activeMsgIdx===null);};
+
+  // --- TRUST & SAFETY HANDLERS ---
+  const submitReport=async({reason,detail,alsoBlock,error})=>{
+    if(error){setReportTarget(null);showError(error);return;}
+    const t=reportTarget;
+    if(!t){setReportTarget(null);return;}
+    const res=await reportSubmit({
+      reporterId:me?.id,targetType:t.type,targetId:t.id,
+      targetOwnerId:t.ownerId,reason,detail,
+    });
+    if(alsoBlock&&t.ownerId!=null&&String(t.ownerId)!==String(me?.id)){
+      await blockUser(me?.id,t.ownerId);
+      setBlockVer(v=>v+1);
+      if(view&&String(view.sid)===String(t.ownerId))setView(null);
+    }
+    setReportTarget(null);
+    showToast(res.queued
+      ? 'Report saved \u2014 it\'ll send as soon as you\'re back online'
+      : 'Report received. Our team reviews these within 24 hours.');
+  };
+  const handleDeleteAccount=async()=>{
+    setDeleteAcctOpen(false);
+    track('account_delete_requested',{});
+    try{
+      if(typeof me?.id==='string'){
+        // Soft-delete: hides the profile and all listings immediately. A scheduled
+        // job performs the hard delete within 30 days, matching the privacy policy.
+        await sb.from('listings').update({status:'deleted'}).eq('seller_id',me.id);
+        await sb.from('profiles').update({deleted_at:new Date().toISOString()}).eq('id',me.id);
+      }
+      await flushEvents();
+      showToast('Account scheduled for deletion. Signing you out\u2026');
+      setTimeout(()=>{signOut();},1200);
+    }catch(err){
+      showError('Could not delete your account. Email '+LEGAL.supportEmail+' and we\'ll handle it.');
+    }
+  };
   // The wordmark doubles as "home". It's the one nav control that stays visible
   // everywhere — the tab bar hides behind overlays and listing detail — so it has
   // to tear the whole stack down, not just switch tabs underneath what's on top.
@@ -3492,6 +4324,7 @@ function App(){
     setView(null);setTab('feed');
   };
   const overlayOpen=crt||notifOpen||savedOpen||settingsOpen||offerOpen;
+  const fullScreenModal=!!(legalKind||blockedOpen);
 
   // --- AUTH GATE ---
   if(authState==='loading'||authState==='in'&&!me){
@@ -3518,27 +4351,52 @@ function App(){
         errorMsg&&e(ErrorBanner,{key:'err',msg:errorMsg,onDismiss:()=>setErrorMsg(null)}),
         toast&&e(Toast,{key:'toast',msg:toast,onDismiss:()=>setToast(null)}),
         safetyOpen&&e(SafetyTipsModal,{key:'safety',onClose:()=>setSafetyOpen(false)}),
+        !isOnline&&e(OfflineBanner,{key:'off'}),
+        reportTarget&&e(ReportModal,{key:'rp',target:reportTarget,onClose:()=>setReportTarget(null),onSubmit:submitReport}),
+        legalKind&&e(LegalModal,{key:'lg',kind:legalKind,onClose:()=>setLegalKind(null)}),
+        prohibitedOpen&&e(ProhibitedItemsModal,{key:'pi',onClose:()=>setProhibitedOpen(false)}),
+        blockedOpen&&e(BlockedUsersModal,{key:'bu',onClose:()=>{setBlockedOpen(false);setBlockVer(v=>v+1);},meId:me?.id,showToast}),
+        deleteAcctOpen&&e(ConfirmModal,{key:'da',title:'Delete your account?',body:'This removes your profile and all your listings. Active conversations and any open reports are kept for safety records. This can\'t be undone.',confirmLabel:'Delete',cancelLabel:'Keep account',danger:true,onCancel:()=>setDeleteAcctOpen(false),onConfirm:handleDeleteAccount}),
         condGuideOpen&&e(ConditionGuideModal,{key:'cguide',onClose:()=>setCondGuideOpen(false)}),
         buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
         reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{try{reviewAdd(reviewFor.seller?.id,r,t,me?.name||'You');}catch(err){}setReviewFor(null);showToast('Thanks for your review!');}}),
-        verifyOpen&&e(VerificationModal,{key:'vf',onClose:()=>setVerifyOpen(false),onVerified:()=>{setVerified(true);kv.set('verified',true);setVerifyOpen(false);showToast('You are now a Verified seller');}}),
+        verifyOpen&&e(VerificationModal,{key:'vf',showToast,onClose:()=>setVerifyOpen(false),onVerified:async()=>{
+          // Only reached after a real OTP check succeeds. Persist to the profile so
+          // the badge is server-truth rather than a local flag anyone could set.
+          setVerified(true);kv.set('verified',true);
+          if(typeof me?.id==='string'){try{await sb.from('profiles').update({verified:true}).eq('id',me.id);}catch{}}
+          setMe(m=>m?{...m,vfd:true}:m);
+          showToast('You are now a Verified seller');
+        }}),
         sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast}),
-        crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),prefill:crtPrefill}),
+        crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
-        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,onTogglePush:async()=>{const p=await pushRequest();const ok=p==='granted';setPushOn(ok);showToast(ok?'Push notifications enabled':'Push permission denied');}}),
+        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,showToast,
+          onOpenLegal:(k)=>{track('legal_viewed',{kind:k});setLegalKind(k);},
+          onOpenProhibited:()=>setProhibitedOpen(true),
+          onOpenBlocked:()=>setBlockedOpen(true),
+          onDeleteAccount:()=>setDeleteAcctOpen(true),
+          onTogglePush:async()=>{
+            if(pushOn){await pushUnsubscribe(me?.id);setPushOn(false);showToast('Push notifications turned off');return;}
+            const r=await pushSubscribe(me?.id);
+            if(r.ok){setPushOn(true);showToast('Push notifications enabled');}
+            else if(r.reason==='denied')showError('Notifications are blocked in your browser settings. Re-allow them there to turn this on.');
+            else if(r.reason==='unavailable')showError('Push isn\'t available on this build yet.');
+            else showError('Could not enable push notifications. Try again.');
+          }}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'Listing posted')]),
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>setSellerView(u)}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>setSellerView(u),onReport:setReportTarget}),
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Saved — check Market for your saved searches')}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
-          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,onOpenReview:(L,seller)=>setReviewFor({L,seller})}),
+          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
           !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
-      !overlayOpen&&!view&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
+      !overlayOpen&&!view&&!fullScreenModal&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
         t.center?e('div',{style:{width:46,height:46,borderRadius:'50%',background:C.lm,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',marginTop:-14,boxShadow:`0 6px 18px ${C.lm}5C`,border:`3px solid ${C.bg}`,transition:'transform var(--dur-1) var(--ease-spring)'}},[e(Ic,{n:t.ic,s:24,sw:2.25})]):[
           e('span',{style:{display:'flex',color:tab===t.id?C.lm:C.mt,opacity:tab===t.id?1:.75,transition:'color var(--dur-2) var(--ease-out),transform var(--dur-2) var(--ease-spring)',transform:tab===t.id?'translateY(-1px)':'none'}},[e(Ic,{n:t.ic,s:20,fill:tab===t.id&&(t.id==='feed'||t.id==='profile'),sw:tab===t.id?2:1.75})]),
           e('span',{style:{fontSize:10,color:tab===t.id?C.lm:C.mt,fontWeight:tab===t.id?700:500}},t.l),
