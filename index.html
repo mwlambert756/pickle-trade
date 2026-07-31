@@ -330,24 +330,25 @@ function reviewAdd(sid,rating,text,by){
 const reviewAvg=(sid)=>{const rv=reviewsFor(sid);if(!rv.length)return null;return Math.round((rv.reduce((a,b)=>a+b.r,0)/rv.length)*10)/10;};
 
 // --- PRICE HISTORY ---
-// Synthesizes a plausible price-history series for a listing (demo). Real listings should
-// log price changes to a `price_history` table; computeSavedStatus already tracks prev_price.
-function priceHistory(L){
-  if(!L||L.price==null)return [];
-  const cur=Number(L.price),orig=Number(L.orig||Math.round(cur*1.25));
-  const seedStr=`${L.brand}${L.model}${L.id}`;
-  let seed=0;for(let i=0;i<seedStr.length;i++)seed=(seed*31+seedStr.charCodeAt(i))%9973;
-  const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return (seed%1000)/1000;};
-  const pts=[];const steps=5;
-  for(let i=0;i<steps;i++){
-    const frac=i/(steps-1);
-    const base=orig+(cur-orig)*frac;
-    const jitter=i===0||i===steps-1?0:(rnd()-0.5)*orig*0.06;
-    pts.push(Math.max(1,Math.round(base+jitter)));
-  }
-  pts[pts.length-1]=cur;
-  const labels=['6w','4w','3w','2w','now'];
-  return pts.map((p,i)=>({label:labels[i]||'',price:p}));
+// Reads real recorded price changes from the price_history table (migration
+// 0005), which a trigger writes on every genuine price update.
+//
+// This replaces a version that synthesized the series in the browser from a
+// seeded PRNG. A buyer reads that chart to decide whether to wait for another
+// drop, so inventing it was making up evidence for someone else's purchase
+// decision. A listing with no recorded changes now shows no chart at all,
+// which is the honest answer for something posted yesterday.
+async function fetchPriceHistory(listingId){
+  if(typeof listingId!=='string')return [];
+  try{
+    const {data,error}=await sb.from('price_history')
+      .select('price,changed_at')
+      .eq('listing_id',listingId)
+      .order('changed_at',{ascending:true})
+      .limit(24);
+    if(error||!data)return [];
+    return data.map(r=>({price:Number(r.price),at:r.changed_at,label:timeAgo(r.changed_at)}));
+  }catch{return [];}
 }
 
 // --- AUCTION HELPERS ---
@@ -1021,9 +1022,9 @@ function profileToUser(p){
     resp:p.response_time||'—',sales:p.sales_count||0,
     ac:p.avatar_color||'#4DA8FF',skill:p.skill||'—',
     lastActive:p.last_active?timeAgo(p.last_active)+' ago':'—',
-    // cashapp/venmo intentionally NOT included — payment handles must only be
-    // fetched on demand via a separate query that's gated by an accepted-deal
-    // RLS policy on the server (see security_fixes.md, Fix 9).
+    // cashapp/venmo are not on profiles at all any more — they live in the
+    // payment_handles table, readable only by a counterparty in an accepted
+    // deal. PaymentSheet fetches them on demand for that one seller.
     lat:p.lat==null?null:Number(p.lat),lng:p.lng==null?null:Number(p.lng),
   };
 }
@@ -1325,17 +1326,33 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
   // elsewhere is reflected without a reload.
   useEffect(()=>{setBlockedN(blockedCount());});
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
+  const [saving,setSaving]=useState(false);
   const save=async()=>{
     const cleaned={...s,cashapp:safeCashapp(s.cashapp),venmo:safeVenmo(s.venmo)};
-    setSettings(cleaned);
-    if(me?.id){
-      await sb.from('profiles').update({cashapp:cleaned.cashapp,venmo:cleaned.venmo}).eq('id',me.id);
-      await sb.from('user_settings').update({
-        notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
-        notif_messages:s.notifMessages,
-        precise_location:s.preciseLoc,
-      }).eq('user_id',me.id);
+    if(!me?.id){setSettings(cleaned);onClose();return;}
+    setSaving(true);
+    // Payment handles live in their own gated table now (migration 0004), not
+    // on profiles. upsert rather than update on both writes: update against a
+    // row that doesn't exist yet affects zero rows and reports no error, which
+    // is exactly how a setting appears to save and then isn't there tomorrow.
+    const {error:phErr}=await sb.from('payment_handles').upsert({
+      user_id:me.id,cashapp:cleaned.cashapp||null,venmo:cleaned.venmo||null,
+    },{onConflict:'user_id'});
+    const {error:usErr}=await sb.from('user_settings').upsert({
+      user_id:me.id,
+      notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
+      notif_messages:s.notifMessages,
+      precise_location:s.preciseLoc,
+    },{onConflict:'user_id'});
+    setSaving(false);
+    if(phErr||usErr){
+      // Stay open so nothing the user typed is lost.
+      showToast&&showToast(phErr
+        ?'Couldn\u2019t save your payment handles. Check the format and try again.'
+        :'Couldn\u2019t save your settings. Check your connection and try again.');
+      return;
     }
+    setSettings(cleaned);
     onClose();
   };
   const Sec=({title,children})=>e('div',{style:{marginBottom:18}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:8}},title),children]);
@@ -1343,7 +1360,7 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
   const Tog=({on,onChange})=>e('button',{onClick:onChange,style:{width:42,height:22,borderRadius:11,background:on?C.lm:C.dm,border:'none',cursor:'pointer',position:'relative',flexShrink:0}},[e('div',{style:{width:16,height:16,borderRadius:'50%',background:'#fff',position:'absolute',top:3,left:on?23:3,transition:'left .2s'}})]);
   const Row=({label,desc,r})=>e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.dm}`}},[e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},label),desc&&e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},desc)]),r]);
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
-    e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),e('div',{style:{flex:1,fontSize:15,fontWeight:800,color:C.tx}},'Settings'),e('button',{onClick:save,style:{background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'Save')]),
+    e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),e('div',{style:{flex:1,fontSize:15,fontWeight:800,color:C.tx}},'Settings'),e('button',{onClick:save,disabled:saving,style:{background:'transparent',border:'none',color:saving?C.mt:C.lm,fontSize:11,fontWeight:700,cursor:saving?'default':'pointer'}},saving?'Saving\u2026':'Save')]),
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},[
       e(Sec,{title:'PROFILE',key:'p'},[
         e(Row,{key:'n',label:'Display name',desc:'Visible to other users',r:e('span',{style:{fontSize:12,color:C.tx}},s.name)}),
@@ -1716,12 +1733,18 @@ function FilterPanel({onClose,onApply,filters,cat}){
   ]);
 }
 
-function NotifPanel({onClose,onListing,onMsgs,notifs,onMarkRead}){
+function NotifPanel({onClose,onListing,onMsgs,notifs,onMarkRead,onGear}){
   const handleTap=(n)=>{
     if(n.unread&&onMarkRead)onMarkRead(n.id);
-    setTimeout(()=>{if(n.type==='wishlist'||n.type==='pricedrop'||n.type==='newlisting'){const l=LS.find(x=>x.id===n.listingId);if(l){onListing(l);onClose();}}else if(n.type==='msg'||n.type==='message'){onMsgs();onClose();}},150);
+    setTimeout(()=>{
+      if(n.type==='wishlist'||n.type==='pricedrop'||n.type==='newlisting'){const l=LS.find(x=>x.id===n.listingId);if(l){onListing(l);onClose();}}
+      else if(n.type==='msg'||n.type==='message'){onMsgs();onClose();}
+      // A gear match says "list it" — so send them to the gear locker where
+      // the paddle already is, not to a listing that doesn't exist yet.
+      else if(n.type==='gearmatch'){onGear&&onGear();onClose();}
+    },150);
   };
-  const colMap={wishlist:C.lm,msg:C.tl,message:C.tl,pricedrop:C.am,follow:C.pu,newlisting:C.tl};
+  const colMap={wishlist:C.lm,msg:C.tl,message:C.tl,pricedrop:C.am,follow:C.pu,newlisting:C.tl,gearmatch:C.ok,wantreply:C.pu};
   const unreadCt=notifs.filter(n=>n.unread).length;
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'back',s:19,sw:2})]),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'Notifications'),unreadCt>0&&e('div',{style:{fontSize:9,color:C.lm,marginTop:1}},`${unreadCt} unread`)])]),
@@ -1877,11 +1900,27 @@ function MsgCard({m,onAccept,onDecline,onCounter,onRetry}){
 function PaymentSheet({onClose,onSend,amount,seller,showToast}){
   const q=checkoutQuote(amount);
   const soon=!PAYMENTS.enabled;
+  // Handles no longer travel on the profile object — they live in the gated
+  // payment_handles table (migration 0004) and are fetched here, on demand,
+  // for this one counterparty. The RLS policy returns nothing unless a deal
+  // between the two of you has actually been accepted, so this request is
+  // the enforcement point rather than the UI hiding a value it already holds.
+  const [handles,setHandles]=useState(null);
+  const sid=seller&&seller.id;
+  useEffect(()=>{
+    let alive=true;
+    if(typeof sid!=='string'){setHandles({});return;}
+    sb.from('payment_handles').select('cashapp,venmo').eq('user_id',sid).maybeSingle()
+      .then(({data})=>{if(alive)setHandles(data||{});})
+      .catch(()=>{if(alive)setHandles({});});
+    return()=>{alive=false;};
+  },[sid]);
+  const h=handles||{};
   // Direct settle-up options stay available until the in-app rail ships.
   const direct=[
     {method:'Cash',handle:'',bg:C.tl,sub:'Hand it over at the meet-up'},
-    seller.cashapp&&{method:'Cash App',handle:seller.cashapp,bg:'#00D632',sub:seller.cashapp},
-    seller.venmo&&{method:'Venmo',handle:seller.venmo,bg:'#3D95CE',sub:seller.venmo},
+    h.cashapp&&{method:'Cash App',handle:h.cashapp,bg:'#00D632',sub:h.cashapp},
+    h.venmo&&{method:'Venmo',handle:h.venmo,bg:'#3D95CE',sub:h.venmo},
   ].filter(Boolean);
   const Line=({l,v,strong})=>e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginTop:strong?7:4}},[
     e('span',{key:'l',style:{fontSize:strong?12:11,color:strong?C.tx:C.mt,fontWeight:strong?800:500}},l),
@@ -2266,34 +2305,60 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
     return()=>{mounted=false;};
   },[me]);
 
+  // Every write below now checks `error` and rolls the optimistic update back
+  // when the server refuses. These previously destructured only `data`, so an
+  // RLS rejection or a dropped connection left the UI showing a change that
+  // was never persisted — the user finds out on next launch, when it's gone.
   const togW=async(gid,w)=>{
     const g=gear.find(x=>x.id===gid);if(!g)return;
+    const prev=g.w;
     const next=g.w.includes(w)?g.w.filter(y=>y!==w):[...g.w,w];
     setGear(gs=>gs.map(x=>x.id!==gid?x:{...x,w:next}));
     if(typeof gid==='string'&&me?.id){
-      await sb.from('gear').update({for_sale:next.includes('sell')}).eq('id',gid).eq('user_id',me.id);
+      const {error}=await sb.from('gear').update({for_sale:next.includes('sell')}).eq('id',gid).eq('user_id',me.id);
+      if(error){
+        setGear(gs=>gs.map(x=>x.id!==gid?x:{...x,w:prev}));
+        showToast&&showToast('Could not update that. Try again.');
+        return;
+      }
+      // Flagging gear for sale is what makes it eligible for wishlist
+      // matching (migration 0007) — the trigger fires on this write.
+      if(next.includes('sell')&&!prev.includes('sell')){
+        showToast&&showToast('Marked for sale — we\u2019ll tell you if someone\u2019s looking for it');
+      }
     }
   };
   const addGear=async(brand,model,cond)=>{
     if(!me?.id||!brand||!model)return;
     const condMap={'Brand New':10,'Like New':9,'Good':7,'Fair':5,'Heavy Use':3};
     const {data:spec}=await sb.from('paddle_specs').select('id').eq('brand',brand).eq('model',model).maybeSingle();
-    const {data}=await sb.from('gear').insert({user_id:me.id,brand,model,condition:condMap[cond]||7,paddle_spec_id:spec?.id||null}).select().single();
-    if(data)setGear(gs=>[{id:data.id,brand,model,cond:data.condition,w:[],p:null},...gs]);
+    const {data,error}=await sb.from('gear').insert({user_id:me.id,brand,model,condition:condMap[cond]||7,paddle_spec_id:spec?.id||null}).select().single();
+    if(error||!data){showToast&&showToast('Could not add that paddle. Try again.');return;}
+    setGear(gs=>[{id:data.id,brand,model,cond:data.condition,w:[],p:null},...gs]);
   };
   const addWish=async(brand,model,maxP)=>{
     if(!me?.id||!brand||!model)return;
     const {data:spec}=await sb.from('paddle_specs').select('id').eq('brand',brand).eq('model',model).maybeSingle();
-    const {data}=await sb.from('wishlist').insert({user_id:me.id,brand,model,max_price:maxP||null,paddle_spec_id:spec?.id||null}).select().single();
-    if(data)setWish(ws=>[{id:data.id,brand,model,maxP:maxP||null},...ws]);
+    const {data,error}=await sb.from('wishlist').insert({user_id:me.id,brand,model,max_price:maxP||null,paddle_spec_id:spec?.id||null}).select().single();
+    if(error||!data){showToast&&showToast('Could not add that to your wishlist. Try again.');return;}
+    setWish(ws=>[{id:data.id,brand,model,maxP:maxP||null},...ws]);
+    showToast&&showToast('Added — we\u2019ll alert you when one turns up nearby');
   };
   const delWish=async(wid)=>{
+    const prev=wish;
     setWish(ws=>ws.filter(x=>x.id!==wid));
-    if(typeof wid==='string'&&me?.id)await sb.from('wishlist').delete().eq('id',wid).eq('user_id',me.id);
+    if(typeof wid==='string'&&me?.id){
+      const {error}=await sb.from('wishlist').delete().eq('id',wid).eq('user_id',me.id);
+      if(error){setWish(prev);showToast&&showToast('Could not remove that. Try again.');}
+    }
   };
   const setWishBudget=async(wid,maxP)=>{
+    const prev=wish;
     setWish(ws=>ws.map(w=>w.id===wid?{...w,maxP}:w));
-    if(typeof wid==='string'&&me?.id)await sb.from('wishlist').update({max_price:maxP}).eq('id',wid).eq('user_id',me.id);
+    if(typeof wid==='string'&&me?.id){
+      const {error}=await sb.from('wishlist').update({max_price:maxP}).eq('id',wid).eq('user_id',me.id);
+      if(error){setWish(prev);showToast&&showToast('Could not update your budget. Try again.');throw error;}
+    }
   };
 
   const MY_LS=[
@@ -3064,8 +3129,16 @@ function SmartSearch({value,onChange,onSubmit,placeholder,onSaveSearch}){
 
 // --- Price history sparkline chart ---
 function PriceHistoryChart({L}){
-  const pts=priceHistory(L);
-  if(pts.length<2)return null;
+  // null while loading, [] once we know there's nothing to draw. Both render
+  // as nothing — a half-drawn chart is worse than no chart.
+  const [pts,setPts]=useState(null);
+  const lid=L&&L.id;
+  useEffect(()=>{
+    let alive=true;
+    fetchPriceHistory(lid).then(rows=>{if(alive)setPts(rows);});
+    return()=>{alive=false;};
+  },[lid]);
+  if(!pts||pts.length<2)return null;
   const W=300,H=70,pad=8;
   const prices=pts.map(p=>p.price);
   const lo=Math.min(...prices),hi=Math.max(...prices),span=hi-lo||1;
@@ -3078,14 +3151,21 @@ function PriceHistoryChart({L}){
   return e('div',{style:{background:C.sf,borderRadius:11,padding:11,border:`1px solid ${C.bd}`}},[
     e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}},[
       e('span',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.3}},'PRICE HISTORY'),
-      delta>0&&e('span',{style:{fontSize:10,fontWeight:800,color:down?C.ok:C.am}},`${down?'▼':'▲'} $${delta} over 6w`),
+      delta>0&&e('span',{style:{fontSize:10,fontWeight:800,color:down?C.ok:C.am}},`${down?'▼':'▲'} $${delta} over ${pts[0].label}`),
     ]),
     e('svg',{key:'s',viewBox:`0 0 ${W} ${H}`,style:{width:'100%',height:H,display:'block'}},[
       e('defs',{key:'d'},[e('linearGradient',{id:'phg',x1:0,y1:0,x2:0,y2:1},[e('stop',{offset:'0%',stopColor:(down?C.ok:C.am),stopOpacity:0.28}),e('stop',{offset:'100%',stopColor:(down?C.ok:C.am),stopOpacity:0})])]),
       e('path',{key:'a',d:area,fill:'url(#phg)'}),
       e('path',{key:'l',d:path,fill:'none',stroke:down?C.ok:C.am,strokeWidth:2,strokeLinejoin:'round',strokeLinecap:'round'}),
       ...pts.map((p,i)=>e('circle',{key:'c'+i,cx:x(i),cy:y(p.price),r:i===pts.length-1?3.5:2.5,fill:i===pts.length-1?(down?C.ok:C.am):C.sf,stroke:down?C.ok:C.am,strokeWidth:1.5})),
-      ...pts.map((p,i)=>e('text',{key:'t'+i,x:x(i),y:H-1,fontSize:7,fill:C.mt,textAnchor:'middle'},p.label)),
+      // Real history can be 2 points or 24, so only label the ends and the
+      // middle — labelling every point turns the axis into a smear.
+      ...pts.map((p,i)=>{
+        const isEnd=i===0||i===pts.length-1;
+        const isMid=pts.length>4&&i===Math.floor((pts.length-1)/2);
+        if(!isEnd&&!isMid)return null;
+        return e('text',{key:'t'+i,x:x(i),y:H-1,fontSize:7,fill:C.mt,textAnchor:i===0?'start':i===pts.length-1?'end':'middle'},i===pts.length-1?'now':p.label);
+      }).filter(Boolean),
     ]),
   ]);
 }
@@ -3843,7 +3923,9 @@ function App(){
 
   // --- NOTIFICATIONS ---
   const [notifs,setNotifs]=useState([...NOTIFS]);
-  const TYPE_ICONS={wishlist:'flame',message:'message',pricedrop:'dollar',offer:'dollar',follow:'users',newlisting:'tag'};
+  // gearmatch: a wishlist somewhere matches gear you've flagged for sale
+  // (migration 0007). wantreply: someone answered your want post (0008).
+  const TYPE_ICONS={wishlist:'flame',message:'message',pricedrop:'dollar',offer:'dollar',follow:'users',newlisting:'tag',gearmatch:'swap',wantreply:'message'};
   const mapNotif=(n)=>({
     id:n.id,type:n.type,ic:n.icon||TYPE_ICONS[n.type]||'bell',
     title:n.title,msg:n.message,time:timeAgo(n.created_at),
@@ -3901,16 +3983,27 @@ function App(){
     // Real DB write only for UUID users + signed-in real profile
     if(typeof userId==='string'&&userId.length>=32&&me?.id){
       if(isF){
-        await sb.from('follows').delete().eq('follower_id',me.id).eq('following_id',userId);
+        const {error}=await sb.from('follows').delete().eq('follower_id',me.id).eq('following_id',userId);
+        if(error){
+          // Roll the optimistic flip back rather than leaving the button
+          // showing a state the server never accepted.
+          setFollowing(f=>f.includes(userId)?f:[...f,userId]);
+          showError('Could not unfollow. Try again.');
+          return;
+        }
         setFollowingUsers(us=>us.filter(u=>u.id!==userId));
       }else{
-        await sb.from('follows').insert({follower_id:me.id,following_id:userId});
-        // Notify the followed user
-        await sb.from('notifications').insert({
-          user_id:userId,type:'follow',title:'New follower',
-          message:`${me.name} started following you`,
-          payload:{detail:'Tap to view their profile',follower_id:me.id},
-        });
+        const {error}=await sb.from('follows').insert({follower_id:me.id,following_id:userId});
+        if(error){
+          setFollowing(f=>f.filter(x=>x!==userId));
+          showError('Could not follow. Try again.');
+          return;
+        }
+        // The "New follower" notification is written by the follows_notify_trg
+        // trigger (migration 0006). It used to be inserted from here, which
+        // required a policy letting any client write a notification into any
+        // other user's tray — attacker-controlled title and body, delivered as
+        // a push. That policy is gone; this is now the server's job.
         const {data:prof}=await sb.from('profiles').select('*').eq('id',userId).maybeSingle();
         if(prof)setFollowingUsers(us=>[profileToUser(prof),...us]);
       }
@@ -4155,19 +4248,12 @@ function App(){
         if(photoErr)console.error('photo rows insert',photoErr);
       }
     }
-    // Notify everyone who follows me about the new listing
-    if(listing){
-      const {data:myFollowers}=await sb.from('follows').select('follower_id').eq('following_id',me.id);
-      if(myFollowers&&myFollowers.length>0){
-        const notifRows=myFollowers.map(f=>({
-          user_id:f.follower_id,type:'newlisting',
-          title:`${me.name} listed a new item`,
-          message:`${safeBrand} ${safeModel} — $${safePrice}`,
-          listing_id:listing.id,payload:{detail:'Tap to view the listing'},
-        }));
-        await sb.from('notifications').insert(notifRows);
-      }
-    }
+    // Followers are notified by the listings_notify_followers_trg trigger
+    // (migration 0006). Doing the fan-out from here meant the client held a
+    // list of every follower id and wrote a notification row per follower —
+    // a loop anyone could replay against any account to spam its followers.
+    // The trigger also respects each recipient's notification settings and
+    // block list, which this loop never checked.
     setCrt(false);setPst(true);setTimeout(()=>setPst(false),2500);
     fetchListings();
   };
@@ -4361,16 +4447,21 @@ function App(){
         buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
         reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{try{reviewAdd(reviewFor.seller?.id,r,t,me?.name||'You');}catch(err){}setReviewFor(null);showToast('Thanks for your review!');}}),
         verifyOpen&&e(VerificationModal,{key:'vf',showToast,onClose:()=>setVerifyOpen(false),onVerified:async()=>{
-          // Only reached after a real OTP check succeeds. Persist to the profile so
-          // the badge is server-truth rather than a local flag anyone could set.
+          // profiles.verified is no longer writable by clients — the column is
+          // revoked at the database and granted only through grant_verification(),
+          // a server-side function. Writing it from here made the trust badge
+          // self-assignable by anyone who opened devtools, which is the opposite
+          // of what a verification badge is for.
+          //
+          // Until the OTP provider is wired up and can call grant_verification()
+          // on a real check, this stays a local, session-only flag.
           setVerified(true);kv.set('verified',true);
-          if(typeof me?.id==='string'){try{await sb.from('profiles').update({verified:true}).eq('id',me.id);}catch{}}
           setMe(m=>m?{...m,vfd:true}:m);
-          showToast('You are now a Verified seller');
+          showToast('Phone confirmed \u2014 seller verification is pending review');
         }}),
         sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
-        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead}),
+        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
         settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,showToast,
           onOpenLegal:(k)=>{track('legal_viewed',{kind:k});setLegalKind(k);},
