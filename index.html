@@ -1213,6 +1213,57 @@ function Ic({n,s=16,c='currentColor',fill=false,sw=1.75,style}){
 const CAT_ICON={paddle:'paddle',gear:'bag'};
 const GEAR_SUB_ICON={Shoes:'shoe',Bag:'bag',Apparel:'shirt',Accessory:'bolt'};
 const GEAR_SUBS=['Shoes','Bag','Apparel','Accessory'];
+// --- STANDARDIZED PADDLE SPEC VOCABULARIES ---
+// These are dropdowns, never free text. Filters need equality: forty
+// spellings of "polypropylene" is the same as having no filter at all.
+// Mirrors the enum types in Postgres (paddle_shape / paddle_core_material
+// / paddle_weight_class) — if you change one, change both.
+
+// Circumference of the handle — how thick it is in your hand. Ships in
+// 1/8" steps from 4.0 to 4.5; nothing else is a real manufactured size.
+const GRIP_CIRCUMFERENCES=[
+  {v:4.000,label:'4.0" — Extra small'},
+  {v:4.125,label:'4.125" — Small'},
+  {v:4.250,label:'4.25" — Standard (most common)'},
+  {v:4.375,label:'4.375" — Large'},
+  {v:4.500,label:'4.5" — Extra large'},
+];
+// Length of the handle before the face starts. Distinct from the above —
+// they get conflated constantly. Longer handles suit two-handed backhands.
+const HANDLE_LENGTHS=[
+  {v:4.50,label:'4.5" — Short'},
+  {v:4.75,label:'4.75"'},
+  {v:5.00,label:'5.0" — Standard'},
+  {v:5.25,label:'5.25"'},
+  {v:5.50,label:'5.5" — Long (two-handed backhand)'},
+  {v:5.75,label:'5.75"+ — Extra long'},
+];
+const CORE_MATERIALS=[
+  'Polypropylene Honeycomb',
+  'Nomex Honeycomb',
+  'Aluminum Honeycomb',
+  'Foam / Hybrid',
+];
+const PADDLE_SHAPES=['Standard','Elongated','Hybrid','Widebody'];
+
+// Weight bands. NOTE the published scale has gaps (7.7->7.8, 8.2->8.3),
+// so a paddle at 7.75oz would fall through. Thresholds here are
+// continuous and match weight_class_for() in Postgres exactly; the
+// labels shown to users are the published ones.
+const WEIGHT_CLASSES=[
+  {k:'Ultra-light', max:7.3, label:'Ultra-light', range:'Under 7.3 oz', feel:'Extremely fast, easy to maneuver'},
+  {k:'Lightweight', max:7.8, label:'Lightweight', range:'7.3\u20137.7 oz',  feel:'Fast hands, less fatigue'},
+  {k:'Midweight',   max:8.3, label:'Midweight',   range:'7.8\u20138.2 oz',  feel:'Balanced power and control'},
+  {k:'Heavyweight', max:8.8, label:'Heavyweight', range:'8.3\u20138.7 oz',  feel:'More plow-through and power'},
+  {k:'Extra Heavy', max:Infinity, label:'Extra Heavy', range:'8.8 oz+', feel:'Maximum stability and power'},
+];
+function weightClassFor(oz){
+  const n=parseFloat(oz);
+  if(!isFinite(n)||n<=0)return null;
+  for(const w of WEIGHT_CLASSES){if(n<w.max)return w.k;}
+  return 'Extra Heavy';
+}
+
 const GEAR_BRANDS=['Adidas','Asics','Fila','Franklin','Gamma','Head','JOOLA','K-Swiss','Lululemon','New Balance','Nike','Onix','Selkirk','Skechers','Tourna','Vulcan'];
 // Icon for any listing — paddle icon, or the gear subtype icon when known.
 const listIcon=(l)=>l.cat==='paddle'?'paddle':(GEAR_SUB_ICON[l.sub]||'bag');
@@ -2638,6 +2689,35 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
   const LS={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
   const valid=f.brand&&f.model&&f.price&&f.desc&&photos.length>0;
   const pdata=f.cat==='paddle'?pdbFind(f.brand,f.model):null;
+  // Live catalogue row for this brand+model. pdata above is the bundled
+  // static PDB (fast, offline, incomplete); this is the database record
+  // that actually holds the crowd-contributed specs and gets written back
+  // to. Null until a match is found, which is fine — the listing posts
+  // either way, we just can't autofill.
+  const [spec,setSpec]=useState(null);
+  const [specLoading,setSpecLoading]=useState(false);
+  useEffect(()=>{
+    if(f.cat!=='paddle'||!f.brand||!f.model){setSpec(null);return;}
+    let alive=true;setSpecLoading(true);
+    const t=setTimeout(async()=>{
+      try{
+        const {data}=await sb.from('paddle_specs')
+          .select('id,brand,model,core,face,thickness,shape_std,core_material,grip_circumference_in,handle_length_in,weight_min_oz,weight_max_oz,approval_status')
+          .ilike('brand',f.brand).ilike('model',f.model).maybeSingle();
+        if(alive){setSpec(data||null);setSpecLoading(false);}
+      }catch{if(alive){setSpec(null);setSpecLoading(false);}}
+    },350); // debounce: model is typed character by character
+    return()=>{alive=false;clearTimeout(t);};
+  },[f.cat,f.brand,f.model]);
+
+  // Which model-constant fields are still missing for this paddle? Only
+  // these get prompted — everything already known is shown as a chip and
+  // never asked again, so the 50th seller of a Perseus answers nothing.
+  const needsCore   = f.cat==='paddle'&&spec&&!spec.core_material;
+  const needsGrip   = f.cat==='paddle'&&spec&&spec.grip_circumference_in==null;
+  const needsHandle = f.cat==='paddle'&&spec&&spec.handle_length_in==null;
+  const needsShape  = f.cat==='paddle'&&spec&&!spec.shape_std;
+  const anyNeeded   = needsCore||needsGrip||needsHandle||needsShape;
   const modelOpts=f.cat==='paddle'&&f.brand?pdbModels(f.brand):[];
   const cc=contentCheck(`${f.brand} ${f.model} ${f.desc}`);
   const handlePost=async()=>{
@@ -2681,14 +2761,87 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
         })),
         photos.length>0&&photos.length<3&&e('div',{style:{fontSize:9,color:C.mt,marginTop:5,lineHeight:1.4}},'Listings with 3+ photos sell 2× faster. Show the face, edge, and any wear.'),
       ]),
-      e('div',null,[e('label',{style:LS},'BRAND'),e('select',{value:f.brand,onChange:ev=>up('brand',ev.target.value),style:IS},[e('option',{value:''},'Select brand...'),...BRANDS.map(b=>e('option',{key:b,value:b},b))])]),
+      // Brand is free text with suggestions, not a locked <select>. As a
+      // dropdown it silently blocked anyone whose brand wasn't among the
+      // ~19 bundled ones from listing at all \u2014 the catalogue must never
+      // be the reason a real paddle can't be sold here.
+      e('div',null,[
+        e('label',{style:LS},'BRAND'),
+        e('input',{value:f.brand,onChange:ev=>up('brand',ev.target.value),placeholder:'Start typing \u2014 or enter any brand',list:'brand-opts',style:IS}),
+        e('datalist',{id:'brand-opts'},BRANDS.map(b=>e('option',{key:b,value:b}))),
+      ]),
       e('div',null,[
         e('label',{style:LS},f.cat==='paddle'?'PADDLE MODEL':'MODEL / NAME'),
         e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:f.cat==='paddle'?'Start typing — we\'ll match our paddle database':'Item name...',list:modelOpts.length?'pdb-models':undefined,style:IS}),
         modelOpts.length>0&&e('datalist',{id:'pdb-models'},modelOpts.map(m=>e('option',{key:m,value:m}))),
         f.cat==='paddle'&&f.model&&!pdata&&e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'Not in our paddle database yet — your listing still posts, specs just won\'t auto-fill.'),
       ]),
-      pdata&&e('div',{style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5}},'FOUND IN PADDLE DATABASE'),e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[['Core',pdata.core],['Face',pdata.face],['Shape',pdata.shape],['Thick',pdata.thk],['Weight',pdata.wt]].map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`)))]),
+      // Known specs, pulled from the catalogue. Model constants only —
+      // shown, not asked. Weight is deliberately absent here: it varies
+      // unit to unit, so it's asked below on every listing instead.
+      (spec||pdata)&&e('div',{key:'known',style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[
+        e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5,display:'flex',alignItems:'center',gap:4}},[
+          e(Ic,{n:'check',s:11,c:C.tl}),
+          spec&&spec.approval_status==='Pass'?'FOUND \u2014 USA PICKLEBALL APPROVED':'FOUND IN PADDLE DATABASE',
+        ]),
+        e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[
+          ['Core',(spec&&spec.core_material)||(pdata&&pdata.core)],
+          ['Face',(spec&&spec.face)||(pdata&&pdata.face)],
+          ['Shape',(spec&&spec.shape_std)||(pdata&&pdata.shape)],
+          ['Thick',(spec&&spec.thickness)||(pdata&&pdata.thk)],
+          ['Grip',spec&&spec.grip_circumference_in!=null?`${(+spec.grip_circumference_in).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}"`:null],
+          ['Handle',spec&&spec.handle_length_in!=null?`${(+spec.handle_length_in).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')}"`:null],
+        ].filter(([l,v])=>v).map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`))),
+      ]),
+
+      // Gap-fill prompts. These write back to the shared catalogue, so
+      // every later seller of this same paddle gets them autofilled and
+      // never sees this block. Optional by design — a missing spec must
+      // never be the reason someone abandons a listing.
+      f.cat==='paddle'&&anyNeeded&&e('div',{key:'enrich',style:{background:C.sf,borderRadius:9,padding:10,border:`1px dashed ${C.lm}40`}},[
+        e('div',{style:{fontSize:9,fontWeight:800,color:C.lm,marginBottom:3}},'HELP US FILL THE GAPS \u2014 OPTIONAL'),
+        e('div',{style:{fontSize:9,color:C.mt,marginBottom:8,lineHeight:1.4}},'You\u2019re the first to list this paddle. Anything you add is saved to our database so nobody has to look it up again.'),
+        needsShape&&e('div',{key:'sh',style:{marginBottom:7}},[
+          e('label',{style:LS},'SHAPE'),
+          e('select',{value:f.specShape||'',onChange:ev=>up('specShape',ev.target.value),style:IS},
+            [e('option',{key:'_',value:''},'Skip'),...PADDLE_SHAPES.map(x=>e('option',{key:x,value:x},x))]),
+        ]),
+        needsCore&&e('div',{key:'cm',style:{marginBottom:7}},[
+          e('label',{style:LS},'CORE MATERIAL'),
+          e('select',{value:f.specCore||'',onChange:ev=>up('specCore',ev.target.value),style:IS},
+            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...CORE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
+        ]),
+        needsGrip&&e('div',{key:'gc',style:{marginBottom:7}},[
+          e('label',{style:LS},'GRIP CIRCUMFERENCE'),
+          e('select',{value:f.specGrip||'',onChange:ev=>up('specGrip',ev.target.value),style:IS},
+            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...GRIP_CIRCUMFERENCES.map(x=>e('option',{key:x.v,value:x.v},x.label))]),
+        ]),
+        needsHandle&&e('div',{key:'hl'},[
+          e('label',{style:LS},'HANDLE LENGTH'),
+          e('select',{value:f.specHandle||'',onChange:ev=>up('specHandle',ev.target.value),style:IS},
+            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...HANDLE_LENGTHS.map(x=>e('option',{key:x.v,value:x.v},x.label))]),
+        ]),
+      ]),
+
+      // Measured weight \u2014 asked EVERY listing, never cached to the model.
+      // A used paddle's weight is not its catalogue weight: overgrips,
+      // lead tape, and manufacturing tolerance all move it, and the buyer
+      // is receiving this specific paddle.
+      f.cat==='paddle'&&e('div',{key:'mw'},[
+        e('label',{style:LS},'MEASURED WEIGHT \u2014 OPTIONAL'),
+        e('div',{style:{position:'relative'}},[
+          e('input',{value:f.weightOz||'',onChange:ev=>up('weightOz',ev.target.value),type:'number',step:'0.1',min:'3',max:'17',placeholder:'e.g. 8.1',style:{...IS,paddingRight:34}}),
+          e('span',{style:{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',color:C.mt,fontSize:11,fontWeight:700}},'oz'),
+        ]),
+        (()=>{
+          const wc=weightClassFor(f.weightOz);
+          if(wc){
+            const w=WEIGHT_CLASSES.find(x=>x.k===wc);
+            return e('div',{style:{fontSize:9,color:C.tl,marginTop:4,fontWeight:700}},`${w.label} (${w.range}) \u2014 ${w.feel}`);
+          }
+          return e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'A kitchen scale works. Buyers trust listings with a real measured weight \u2014 and yours may differ from the factory spec if it has an overgrip or lead tape.');
+        })(),
+      ]),
       e('div',null,[e('label',{style:LS},'LISTING TYPE'),e('div',{style:{display:'flex',gap:6}},[
         e('button',{key:'fx',onClick:()=>up('saleType','fixed'),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${f.saleType!=='auction'?C.lm:C.bd}`,background:f.saleType!=='auction'?C.lm+'15':'transparent',color:f.saleType!=='auction'?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},e(IcTxt,{n:'tag',s:12},'Fixed price')),
         e('button',{key:'au',onClick:()=>up('saleType','auction'),style:{flex:1,padding:'8px 0',borderRadius:9,border:`1px solid ${f.saleType==='auction'?C.am:C.bd}`,background:f.saleType==='auction'?C.am+'15':'transparent',color:f.saleType==='auction'?C.am:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},e(IcTxt,{n:'gavel',s:12},'Auction')),
@@ -4218,6 +4371,11 @@ function App(){
       paddle_spec_id:specId,
       tag:'NEW',
     };
+    // Per-unit measured weight. weight_class is NOT sent: a trigger
+    // derives it from this number server-side, so a seller can't tag a
+    // 9oz paddle "Lightweight" to catch a filter it shouldn't match.
+    const wOz=parseFloat(formData.weightOz);
+    if(isFinite(wOz)&&wOz>3&&wOz<17)row.measured_weight_oz=Math.round(wOz*10)/10;
     // Auction listings carry an end time; bids are tracked separately
     if(formData.saleType==='auction'){
       row.is_auction=true;
@@ -4229,6 +4387,30 @@ function App(){
     if(error){console.error('insert listing',error);throw new Error(error.message||'insert_failed');}
     rateRecord('listing_create');
     track('listing_created',{cat:formData.cat,saleType:formData.saleType,photos:(photoFiles||[]).length});
+    // Teach the catalogue anything this seller knew that we didn't. The
+    // RPC only fills NULLs — it never overwrites an existing value, so
+    // one user can't rewrite specs everyone else depends on. Failure here
+    // is non-fatal: the listing is already posted and a missing spec is
+    // not worth surfacing an error over.
+    if(specId&&(formData.specCore||formData.specGrip||formData.specHandle||formData.specShape)){
+      try{
+        const {data:enr}=await sb.rpc('enrich_paddle_spec',{
+          p_spec_id:specId,
+          p_core:formData.specCore||null,
+          p_grip:formData.specGrip?parseFloat(formData.specGrip):null,
+          p_handle:formData.specHandle?parseFloat(formData.specHandle):null,
+          p_shape:formData.specShape||null,
+        });
+        const r=Array.isArray(enr)?enr[0]:enr;
+        if(r&&r.conflicted){
+          // Contributed core material disagrees with the USAP record for
+          // this paddle. Not written, not argued with — logged for review.
+          track('spec_conflict',{spec_id:specId,field:'core_material'});
+        }else if(r&&r.filled&&r.filled.length){
+          track('spec_enriched',{spec_id:specId,fields:r.filled.length});
+        }
+      }catch(err){console.warn('enrich_paddle_spec',err);}
+    }
     // Upload photos to storage and insert listing_photos rows
     if(photoFiles&&photoFiles.length>0&&listing){
       const photoRows=[];
