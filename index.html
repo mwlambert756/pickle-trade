@@ -1245,6 +1245,15 @@ const CORE_MATERIALS=[
   'Foam / Hybrid',
 ];
 const PADDLE_SHAPES=['Standard','Elongated','Hybrid','Widebody'];
+// Core thickness. 14mm and 16mm dominate; the rest exist but are rarer.
+// Stored as text to match the existing paddle_specs.thickness column.
+const THICKNESSES=['10mm','11mm','12mm','13mm','14mm','16mm','19mm'];
+// Face material. USAP reports material and finish separately ("Carbon
+// Fiber" + "Raw"), so the combined forms players actually use are listed.
+const FACE_MATERIALS=[
+  'Raw Carbon Fiber','T700 Carbon Fiber','Toray Carbon Fiber','Carbon Fiber',
+  'Fiberglass / Composite','Graphite','Kevlar / Hybrid','Polymer Composite',
+];
 
 // Weight bands. NOTE the published scale has gaps (7.7->7.8, 8.2->8.3),
 // so a paddle at 7.75oz would fall through. Thresholds here are
@@ -2710,21 +2719,47 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
     return()=>{alive=false;clearTimeout(t);};
   },[f.cat,f.brand,f.model]);
 
-  // Which model-constant fields are still missing for this paddle? Only
-  // these get prompted — everything already known is shown as a chip and
-  // never asked again, so the 50th seller of a Perseus answers nothing.
-  const needsCore   = f.cat==='paddle'&&spec&&!spec.core_material;
-  const needsGrip   = f.cat==='paddle'&&spec&&spec.grip_circumference_in==null;
-  const needsHandle = f.cat==='paddle'&&spec&&spec.handle_length_in==null;
-  const needsShape  = f.cat==='paddle'&&spec&&!spec.shape_std;
-  const anyNeeded   = needsCore||needsGrip||needsHandle||needsShape;
+  // Autofill the spec fields from the catalogue whenever a new paddle is
+  // matched. Tracked in autoFilled so we can tell later whether a value
+  // came from us or from the seller — a seller who overrides one of ours
+  // is making a correction, not contributing a missing spec, and those
+  // are handled differently on submit.
+  const [autoFilled,setAutoFilled]=useState({});
+  const lastSpecRef=useRef(null);
+  useEffect(()=>{
+    const sid=spec?spec.id:null;
+    if(lastSpecRef.current===sid)return;
+    lastSpecRef.current=sid;
+    if(!spec){setAutoFilled({});return;}
+    const fill={},marks={};
+    const put=(key,val)=>{if(val!=null&&val!==''){fill[key]=String(val);marks[key]=String(val);}};
+    put('specShape',spec.shape_std);
+    put('specCore',spec.core_material);
+    put('specThickness',spec.thickness);
+    put('specFace',spec.face);
+    if(spec.grip_circumference_in!=null)put('specGrip',(+spec.grip_circumference_in).toFixed(3));
+    if(spec.handle_length_in!=null)put('specHandle',(+spec.handle_length_in).toFixed(2));
+    setAutoFilled(marks);
+    setF(x=>({...x,...fill}));
+  },[spec]);
+
+  // A dropdown value that we didn't autofill, or that the seller changed
+  // away from what we autofilled.
+  const isOverride=(key)=>autoFilled[key]!=null&&f[key]!=null&&String(f[key])!==String(autoFilled[key]);
+  const anyOverride=['specShape','specCore','specThickness','specFace','specGrip','specHandle'].some(isOverride);
   const modelOpts=f.cat==='paddle'&&f.brand?pdbModels(f.brand):[];
   const cc=contentCheck(`${f.brand} ${f.model} ${f.desc}`);
   const handlePost=async()=>{
     if(!valid||busy||cc.blocked)return;
     setBusy(true);
     try{
-      await onPost(f,photos.map(p=>p.file));
+      // Map UI field names to the catalogue columns the server knows, and
+      // include only values the seller actually changed from ours.
+      const COL={specShape:'shape_std',specCore:'core_material',specThickness:'thickness',
+                 specFace:'face',specGrip:'grip_circumference_in',specHandle:'handle_length_in'};
+      const specOverrides={};
+      Object.keys(COL).forEach(k=>{if(isOverride(k))specOverrides[COL[k]]=f[k];});
+      await onPost({...f,specOverrides},photos.map(p=>p.file));
       showToast&&showToast('Listing posted successfully');
     }catch(err){
       // onPost throws with a reason; rate-limit and policy blocks already show
@@ -2776,50 +2811,66 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
         modelOpts.length>0&&e('datalist',{id:'pdb-models'},modelOpts.map(m=>e('option',{key:m,value:m}))),
         f.cat==='paddle'&&f.model&&!pdata&&e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'Not in our paddle database yet — your listing still posts, specs just won\'t auto-fill.'),
       ]),
-      // Known specs, pulled from the catalogue. Model constants only —
-      // shown, not asked. Weight is deliberately absent here: it varies
-      // unit to unit, so it's asked below on every listing instead.
-      (spec||pdata)&&e('div',{key:'known',style:{background:C.tl+'10',borderRadius:9,padding:9,border:`1px solid ${C.tl}30`}},[
-        e('div',{style:{fontSize:9,fontWeight:800,color:C.tl,marginBottom:5,display:'flex',alignItems:'center',gap:4}},[
-          e(Ic,{n:'check',s:11,c:C.tl}),
-          spec&&spec.approval_status==='Pass'?'FOUND \u2014 USA PICKLEBALL APPROVED':'FOUND IN PADDLE DATABASE',
+      // Model-constant specs. Always visible as their own fields, autofilled
+      // from the catalogue when we know the answer and left open when we
+      // don't. Previously this was a read-only chip summary plus a separate
+      // prompt block for missing values — two different UIs for the same six
+      // facts, and no way to correct one we had wrong.
+      //
+      // Weight is deliberately NOT here: it varies unit to unit, so it's
+      // asked separately below on every listing.
+      f.cat==='paddle'&&e('div',{key:'specs',style:{background:C.sf,borderRadius:9,padding:10,border:`1px solid ${C.bd}`}},[
+        e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:3}},[
+          e('div',{style:{fontSize:9,fontWeight:800,color:C.tx}},'PADDLE SPECS'),
+          specLoading&&e('div',{style:{fontSize:9,color:C.mt}},'checking\u2026'),
+          !specLoading&&spec&&Object.keys(autoFilled).length>0&&e('div',{style:{fontSize:9,color:C.tl,fontWeight:700,display:'flex',alignItems:'center',gap:3}},[
+            e(Ic,{n:'check',s:10,c:C.tl}),
+            spec.approval_status==='Pass'?'Auto-filled \u00b7 USAP approved':'Auto-filled',
+          ]),
         ]),
-        e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[
-          ['Core',(spec&&spec.core_material)||(pdata&&pdata.core)],
-          ['Face',(spec&&spec.face)||(pdata&&pdata.face)],
-          ['Shape',(spec&&spec.shape_std)||(pdata&&pdata.shape)],
-          ['Thick',(spec&&spec.thickness)||(pdata&&pdata.thk)],
-          ['Grip',spec&&spec.grip_circumference_in!=null?`${(+spec.grip_circumference_in).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}"`:null],
-          ['Handle',spec&&spec.handle_length_in!=null?`${(+spec.handle_length_in).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')}"`:null],
-        ].filter(([l,v])=>v).map(([l,v])=>e('span',{key:l,style:{fontSize:9,color:C.tx,background:C.cd,borderRadius:5,padding:'2px 6px'}},`${l}: ${v}`))),
-      ]),
-
-      // Gap-fill prompts. These write back to the shared catalogue, so
-      // every later seller of this same paddle gets them autofilled and
-      // never sees this block. Optional by design — a missing spec must
-      // never be the reason someone abandons a listing.
-      f.cat==='paddle'&&anyNeeded&&e('div',{key:'enrich',style:{background:C.sf,borderRadius:9,padding:10,border:`1px dashed ${C.lm}40`}},[
-        e('div',{style:{fontSize:9,fontWeight:800,color:C.lm,marginBottom:3}},'HELP US FILL THE GAPS \u2014 OPTIONAL'),
-        e('div',{style:{fontSize:9,color:C.mt,marginBottom:8,lineHeight:1.4}},'You\u2019re the first to list this paddle. Anything you add is saved to our database so nobody has to look it up again.'),
-        needsShape&&e('div',{key:'sh',style:{marginBottom:7}},[
-          e('label',{style:LS},'SHAPE'),
-          e('select',{value:f.specShape||'',onChange:ev=>up('specShape',ev.target.value),style:IS},
-            [e('option',{key:'_',value:''},'Skip'),...PADDLE_SHAPES.map(x=>e('option',{key:x,value:x},x))]),
+        e('div',{style:{fontSize:9,color:C.mt,marginBottom:8,lineHeight:1.4}},
+          spec&&Object.keys(autoFilled).length>0
+            ?'Pulled from our database. Change anything that doesn\u2019t match your paddle.'
+            :'Optional \u2014 anything you add is saved so the next seller of this paddle doesn\u2019t have to look it up.'),
+        e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7}},[
+          e('div',{key:'sh'},[
+            e('label',{style:LS},'SHAPE'),
+            e('select',{value:f.specShape||'',onChange:ev=>up('specShape',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...PADDLE_SHAPES.map(x=>e('option',{key:x,value:x},x))]),
+          ]),
+          e('div',{key:'th'},[
+            e('label',{style:LS},'THICKNESS'),
+            e('select',{value:f.specThickness||'',onChange:ev=>up('specThickness',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...THICKNESSES.map(x=>e('option',{key:x,value:x},x))]),
+          ]),
+          e('div',{key:'cm',style:{gridColumn:'1 / -1'}},[
+            e('label',{style:LS},'CORE MATERIAL'),
+            e('select',{value:f.specCore||'',onChange:ev=>up('specCore',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...CORE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
+          ]),
+          e('div',{key:'fc',style:{gridColumn:'1 / -1'}},[
+            e('label',{style:LS},'FACE MATERIAL'),
+            e('select',{value:f.specFace||'',onChange:ev=>up('specFace',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...FACE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
+          ]),
+          e('div',{key:'gc'},[
+            e('label',{style:LS},'GRIP CIRCUMFERENCE'),
+            e('select',{value:f.specGrip||'',onChange:ev=>up('specGrip',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...GRIP_CIRCUMFERENCES.map(x=>e('option',{key:x.v,value:x.v.toFixed(3)},x.label))]),
+          ]),
+          e('div',{key:'hl'},[
+            e('label',{style:LS},'HANDLE LENGTH'),
+            e('select',{value:f.specHandle||'',onChange:ev=>up('specHandle',ev.target.value),style:IS},
+              [e('option',{key:'_',value:''},'\u2014'),...HANDLE_LENGTHS.map(x=>e('option',{key:x.v,value:x.v.toFixed(2)},x.label))]),
+          ]),
         ]),
-        needsCore&&e('div',{key:'cm',style:{marginBottom:7}},[
-          e('label',{style:LS},'CORE MATERIAL'),
-          e('select',{value:f.specCore||'',onChange:ev=>up('specCore',ev.target.value),style:IS},
-            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...CORE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
-        ]),
-        needsGrip&&e('div',{key:'gc',style:{marginBottom:7}},[
-          e('label',{style:LS},'GRIP CIRCUMFERENCE'),
-          e('select',{value:f.specGrip||'',onChange:ev=>up('specGrip',ev.target.value),style:IS},
-            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...GRIP_CIRCUMFERENCES.map(x=>e('option',{key:x.v,value:x.v},x.label))]),
-        ]),
-        needsHandle&&e('div',{key:'hl'},[
-          e('label',{style:LS},'HANDLE LENGTH'),
-          e('select',{value:f.specHandle||'',onChange:ev=>up('specHandle',ev.target.value),style:IS},
-            [e('option',{key:'_',value:''},'Not sure \u2014 skip'),...HANDLE_LENGTHS.map(x=>e('option',{key:x.v,value:x.v},x.label))]),
+        // Overriding a value we supplied is a correction to shared reference
+        // data, not a contribution to a blank field. Say so, rather than
+        // accepting the edit and silently dropping it (the RPC only fills
+        // NULLs by design, so it would otherwise vanish without a trace).
+        anyOverride&&e('div',{style:{fontSize:9,color:C.am,marginTop:7,lineHeight:1.4,display:'flex',gap:4}},[
+          e(Ic,{n:'info',s:11,c:C.am}),
+          e('span',null,'Your listing will show what you selected. We\u2019ll flag the difference for review before changing our database.'),
         ]),
       ]),
 
@@ -4392,7 +4443,8 @@ function App(){
     // one user can't rewrite specs everyone else depends on. Failure here
     // is non-fatal: the listing is already posted and a missing spec is
     // not worth surfacing an error over.
-    if(specId&&(formData.specCore||formData.specGrip||formData.specHandle||formData.specShape)){
+    if(specId&&(formData.specCore||formData.specGrip||formData.specHandle||
+                formData.specShape||formData.specThickness||formData.specFace)){
       try{
         const {data:enr}=await sb.rpc('enrich_paddle_spec',{
           p_spec_id:specId,
@@ -4400,6 +4452,8 @@ function App(){
           p_grip:formData.specGrip?parseFloat(formData.specGrip):null,
           p_handle:formData.specHandle?parseFloat(formData.specHandle):null,
           p_shape:formData.specShape||null,
+          p_thickness:formData.specThickness||null,
+          p_face:formData.specFace||null,
         });
         const r=Array.isArray(enr)?enr[0]:enr;
         if(r&&r.conflicted){
@@ -4410,6 +4464,19 @@ function App(){
           track('spec_enriched',{spec_id:specId,fields:r.filled.length});
         }
       }catch(err){console.warn('enrich_paddle_spec',err);}
+
+      // Anything the seller changed away from a value we supplied goes to
+      // the corrections queue. enrich_paddle_spec only fills NULLs — one
+      // user must not be able to rewrite specs everyone else relies on —
+      // so without this the edit would be accepted in the UI and quietly
+      // discarded, which is the failure mode we keep designing out.
+      const overrides=formData.specOverrides||{};
+      for(const [field,suggested] of Object.entries(overrides)){
+        try{
+          await sb.rpc('suggest_spec_correction',{p_spec_id:specId,p_field:field,p_suggested:String(suggested)});
+          track('spec_correction_filed',{spec_id:specId,field});
+        }catch(err){console.warn('suggest_spec_correction',err);}
+      }
     }
     // Upload photos to storage and insert listing_photos rows
     if(photoFiles&&photoFiles.length>0&&listing){
