@@ -825,7 +825,7 @@ const PDB={
 'JOOLA:Magnus 3 16':{core:'Propulsion Core',face:'Raw Carbon',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2024,avgS:172,avgL:198,rng:[150,225]},
 'JOOLA:Scorpeus CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Standard',thk:'16mm',wt:'8.0oz',grLen:'Standard',yr:2023,avgS:140,avgL:160,rng:[120,180]},
 'JOOLA:Ben Johns Vision CGS 16':{core:'Polypropylene',face:'Carbon Grip',shape:'Standard',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2022,avgS:72,avgL:88,rng:[55,105]},
-'JOOLA:Radius CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Round',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:128,avgL:148,rng:[110,168]},
+'JOOLA:Radius CFS 16':{core:'Polypropylene',face:'Carbon Friction',shape:'Widebody',thk:'16mm',wt:'7.9oz',grLen:'Standard',yr:2023,avgS:128,avgL:148,rng:[110,168]},
 
 // ---- CRBN ----
 'CRBN:CRBN-1X':{core:'Polypropylene',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.7oz',grLen:'Standard',yr:2022,avgS:130,avgL:152,rng:[110,175]},
@@ -1274,6 +1274,43 @@ function weightClassFor(oz){
 }
 
 const GEAR_BRANDS=['Adidas','Asics','Fila','Franklin','Gamma','Head','JOOLA','K-Swiss','Lululemon','New Balance','Nike','Onix','Selkirk','Skechers','Tourna','Vulcan'];
+
+// =====================================================================
+// MARKET FILTER OPTIONS
+// Derived rather than hardcoded, so the Market filter can't drift away from
+// the data the way it had (it was missing X5 Polymer, several face materials,
+// and 11mm/20mm thickness, leaving real listings unreachable).
+//
+// SHAPE is the exception: PADDLE_SHAPES is the app's canonical vocabulary and
+// the same list the Sell form offers, so it leads. Any shape found in PDB but
+// absent from the canonical list still gets appended — that way a stray value
+// stays filterable instead of silently hiding listings, and it shows up as an
+// obvious tail entry worth reconciling.
+//
+// Ordering: shape follows PADDLE_SHAPES; thickness ascends by mm; the rest are
+// most-common-first so the options people actually reach for lead the pill row.
+// Must sit below PADDLE_SHAPES — this IIFE runs at load and would hit the
+// temporal dead zone if hoisted above it.
+// =====================================================================
+const PDB_SPECS=(()=>{
+  const out={};
+  const pdbVals=(k)=>{
+    const counts={};
+    Object.values(PDB).forEach(d=>{const v=d&&d[k];if(v)counts[v]=(counts[v]||0)+1;});
+    return counts;
+  };
+  ['core','face','thk','grLen'].forEach(k=>{
+    const counts=pdbVals(k);
+    const vals=Object.keys(counts);
+    if(k==='thk')vals.sort((a,b)=>parseFloat(a)-parseFloat(b));
+    else vals.sort((a,b)=>counts[b]-counts[a]||a.localeCompare(b));
+    out[k]=['All',...vals];
+  });
+  const shapeCounts=pdbVals('shape');
+  const extras=Object.keys(shapeCounts).filter(v=>!PADDLE_SHAPES.includes(v)).sort();
+  out.shape=['All',...PADDLE_SHAPES,...extras];
+  return out;
+})();
 // Icon for any listing — paddle icon, or the gear subtype icon when known.
 const listIcon=(l)=>l.cat==='paddle'?'paddle':(GEAR_SUB_ICON[l.sub]||'bag');
 // Inline label helper: icon + text on a shared baseline (replaces emoji-in-template-string labels)
@@ -1755,8 +1792,34 @@ function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
   ]);
 }
 
-const initFilters={brands:[],modelQ:'',cond:'All',maxP:300,maxD:25,core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',sub:'All',gender:'All',size:'All',btype:'All'};
-const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(f.maxP<300)c++;if(f.maxD!==25)c++;['core','face','shape','weight','thk','grLen','sub','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
+// minP/maxP are STRINGS ('' = unset) because they're backed by text inputs.
+// Either can stand alone: min only = "that price and above", max only = "that
+// price and below", both = a closed band, neither = no price filtering at all.
+const initFilters={brands:[],modelQ:'',cond:'All',minP:'',maxP:'',maxD:25,core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',sub:'All',gender:'All',size:'All',btype:'All'};
+// Parse a price box to a number, or null when it's blank/garbage.
+const priceNum=(v)=>{if(v===''||v==null)return null;const n=Number(v);return isNaN(n)?null:n;};
+// Hydration guard. Filters persist to kv and ride along in saved searches, so
+// values written by the old slider build (maxP as a 0-300 number, where 300
+// meant "no cap") still show up. Normalize them instead of letting a stale 300
+// masquerade as a real $300 ceiling.
+const normFilters=(f)=>{
+  const out={...initFilters,...(f||{})};
+  if(typeof out.maxP==='number')out.maxP=out.maxP>=300?'':String(out.maxP);
+  if(typeof out.minP==='number')out.minP=out.minP<=0?'':String(out.minP);
+  out.maxP=out.maxP==null?'':String(out.maxP);
+  out.minP=out.minP==null?'':String(out.minP);
+  return out;
+};
+// A price range counts as ONE active filter even when both boxes are filled —
+// the badge should read "1 filter", not "2", for a single conceptual choice.
+const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(priceNum(f.minP)!=null||priceNum(f.maxP)!=null)c++;if(f.maxD!==25)c++;['core','face','shape','weight','thk','grLen','sub','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
+
+// Hoisted out of FilterPanel: when these were defined inside the component body
+// they got a fresh function identity every render, so React remounted the whole
+// section tree on each keystroke — which would blow focus out of the price
+// inputs after a single digit. At module scope the element type is stable.
+const FSec=({title,c})=>e('div',{style:{marginBottom:14}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:7}},title),c]);
+const FPills=({opts,sel,onSel,multi})=>e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},opts.map(o=>{const a=multi?sel.includes(o):sel===o;return e('button',{key:o,onClick:()=>onSel(o),style:{padding:'5px 10px',borderRadius:9,border:`1px solid ${a?C.lm:C.bd}`,background:a?C.lm+'20':C.cd,color:a?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},o);}));
 
 function FilterPanel({onClose,onApply,filters,cat}){
   const [f,setF]=useState({...filters});
@@ -1771,13 +1834,32 @@ function FilterPanel({onClose,onApply,filters,cat}){
   const BRANDS=BRAND_MAP[cat]||[...new Set([...PADDLE_BRANDS,...GEAR_BRANDS])].sort();
   const SHOE_SZ=['All','7','7.5','8','8.5','9','9.5','10','10.5','11','11.5','12','13'];
   const AP_SZ=['All','XS','S','M','L','XL','XXL'];
-  const Sec=({title,c})=>e('div',{style:{marginBottom:14}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.6,marginBottom:7}},title),c]);
-  const Pills=({opts,sel,onSel,multi})=>e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},opts.map(o=>{const a=multi?sel.includes(o):sel===o;return e('button',{key:o,onClick:()=>onSel(o),style:{padding:'5px 10px',borderRadius:9,border:`1px solid ${a?C.lm:C.bd}`,background:a?C.lm+'20':C.cd,color:a?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},o);}));
+  const Sec=FSec,Pills=FPills;
+  // Price box plumbing. Digits only, so a stray letter can't poison Number().
+  const PIS={width:'100%',padding:'9px 11px 9px 22px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none',appearance:'none'};
+  const minN=priceNum(f.minP),maxN=priceNum(f.maxP);
+  const priceBad=minN!=null&&maxN!=null&&minN>maxN;
+  const priceHint=priceBad?'Minimum is higher than maximum — no listing can match'
+    :minN!=null&&maxN!=null?`Showing listings from $${minN} to $${maxN}`
+    :minN!=null?`Showing listings at $${minN} and above`
+    :maxN!=null?`Showing listings at $${maxN} and below`
+    :'Fill in one box for an open-ended range, or both for a band. Leave blank for any price.';
+  const PriceBox=(k,ph,label)=>e('div',{key:k,style:{flex:1,position:'relative'}},[
+    e('span',{key:'$',style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:C.mt,fontWeight:800,fontSize:12,pointerEvents:'none'}},'$'),
+    e('input',{key:'i',value:f[k],onChange:ev=>up(k,ev.target.value.replace(/[^0-9]/g,'').slice(0,6)),type:'text',inputMode:'numeric',placeholder:ph,'aria-label':label,style:{...PIS,borderColor:priceBad?C.rd:C.bd}}),
+  ]);
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'close',s:18,sw:2})]),e('span',{style:{fontSize:15,fontWeight:800,color:C.tx,flex:1,letterSpacing:'-0.02em'}},`Filter ${cat}`),e('button',{onClick:reset,style:{background:'transparent',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer'}},'Reset')]),
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14}},[
       e(Sec,{title:'BRAND',c:e(Pills,{opts:BRANDS,sel:f.brands,onSel:togBrand,multi:true})}),
-      cat==='Paddles'&&[e(Sec,{key:'co',title:'CORE',c:e(Pills,{opts:['All','Polymer','Polypropylene','Nomex'],sel:f.core,onSel:v=>up('core',v)})}),e(Sec,{key:'fa',title:'FACE',c:e(Pills,{opts:['All','Raw T700 Carbon','Raw Carbon','Carbon Friction','Graphite','Composite'],sel:f.face,onSel:v=>up('face',v)})}),e(Sec,{key:'sh',title:'SHAPE',c:e(Pills,{opts:['All','Standard','Hybrid','Elongated'],sel:f.shape,onSel:v=>up('shape',v)})}),e(Sec,{key:'wt',title:'WEIGHT',c:e(Pills,{opts:['All','Light','Mid','Heavy'],sel:f.weight,onSel:v=>up('weight',v)})}),e(Sec,{key:'tk',title:'THICKNESS',c:e(Pills,{opts:['All','13mm','14mm','16mm'],sel:f.thk,onSel:v=>up('thk',v)})})],
+      cat==='Paddles'&&[
+        e(Sec,{key:'co',title:'CORE',c:e(Pills,{opts:PDB_SPECS.core,sel:f.core,onSel:v=>up('core',v)})}),
+        e(Sec,{key:'fa',title:'FACE',c:e(Pills,{opts:PDB_SPECS.face,sel:f.face,onSel:v=>up('face',v)})}),
+        e(Sec,{key:'sh',title:'SHAPE',c:e(Pills,{opts:PDB_SPECS.shape,sel:f.shape,onSel:v=>up('shape',v)})}),
+        e(Sec,{key:'wt',title:'WEIGHT',c:e(Pills,{opts:['All','Light','Mid','Heavy'],sel:f.weight,onSel:v=>up('weight',v)})}),
+        e(Sec,{key:'tk',title:'THICKNESS',c:e(Pills,{opts:PDB_SPECS.thk,sel:f.thk,onSel:v=>up('thk',v)})}),
+        e(Sec,{key:'gl',title:'HANDLE LENGTH',c:e(Pills,{opts:PDB_SPECS.grLen,sel:f.grLen,onSel:v=>up('grLen',v)})}),
+      ],
       cat==='Gear'&&[
         e(Sec,{key:'gt',title:'GEAR TYPE',c:e(Pills,{opts:['All',...GEAR_SUBS],sel:f.sub,onSel:v=>up('sub',v)})}),
         (f.sub==='Shoes'||f.sub==='Apparel')&&e(Sec,{key:'gg',title:'GENDER',c:e(Pills,{opts:['All','Mens','Womens','Unisex'],sel:f.gender,onSel:v=>up('gender',v)})}),
@@ -1786,10 +1868,17 @@ function FilterPanel({onClose,onApply,filters,cat}){
         f.sub==='Bag'&&e(Sec,{key:'gb',title:'BAG TYPE',c:e(Pills,{opts:['All','Backpack','Duffel','Sling','Tote'],sel:f.btype,onSel:v=>up('btype',v)})}),
       ],
       e(Sec,{title:'CONDITION',c:e(Pills,{opts:['All','Brand New','Like New','Good','Fair'],sel:f.cond,onSel:v=>up('cond',v)})}),
-      e(Sec,{title:`MAX PRICE — $${f.maxP}`,c:e('input',{type:'range',min:0,max:300,step:5,value:f.maxP,onChange:ev=>up('maxP',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
+      e(Sec,{title:'PRICE',c:e('div',null,[
+        e('div',{key:'r',style:{display:'flex',alignItems:'center',gap:8}},[
+          PriceBox('minP','Min','Minimum price'),
+          e('span',{key:'to',style:{fontSize:10,color:C.mt,fontWeight:700,flexShrink:0}},'to'),
+          PriceBox('maxP','Max','Maximum price'),
+        ]),
+        e('div',{key:'h',style:{fontSize:9,color:priceBad?C.rd:C.mt,marginTop:6,lineHeight:1.45,fontWeight:priceBad?700:500}},priceHint),
+      ])}),
       e(Sec,{title:`MAX DISTANCE — ${f.maxD}mi`,c:e('input',{type:'range',min:1,max:200,step:1,value:f.maxD,onChange:ev=>up('maxD',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
     ]),
-    e('div',{key:'f',style:{padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:()=>{onApply(f);onClose();},style:{width:'100%',padding:'12px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:14,fontWeight:800,color:'#fff'}},'Apply Filters')]),
+    e('div',{key:'f',style:{padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:()=>{if(priceBad)return;onApply(f);onClose();},disabled:priceBad,style:{width:'100%',padding:'12px 0',borderRadius:11,background:priceBad?C.dm:C.lm,border:'none',cursor:priceBad?'not-allowed':'pointer',fontSize:14,fontWeight:800,color:priceBad?C.mt:'#fff'}},priceBad?'Fix the price range to continue':'Apply Filters')]),
   ]);
 }
 
@@ -1881,12 +1970,17 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   if(cat!=='All')R=R.filter(l=>l.cat===cMap[cat]);
   if(filters.brands.length)R=R.filter(l=>filters.brands.includes(l.brand));
   if(filters.cond!=='All'){const cM={'Brand New':10,'Like New':9,'Good':7,'Fair':5};R=R.filter(l=>l.cond>=(cM[filters.cond]||0));}
-  R=R.filter(l=>l.price<=filters.maxP);
+  // Each bound is applied only if it was actually entered, so a lone min box
+  // means "and above" and a lone max box means "and below".
+  const fMin=priceNum(filters.minP),fMax=priceNum(filters.maxP);
+  if(fMin!=null)R=R.filter(l=>l.price>=fMin);
+  if(fMax!=null)R=R.filter(l=>l.price<=fMax);
   if(filters.core!=='All')R=R.filter(l=>l.cat!=='paddle'||l.core===filters.core);
   if(filters.face!=='All')R=R.filter(l=>l.cat!=='paddle'||l.face===filters.face);
   if(filters.shape!=='All')R=R.filter(l=>l.cat!=='paddle'||l.shape===filters.shape);
   if(filters.weight!=='All')R=R.filter(l=>l.cat!=='paddle'||wtClass(l.wt)===filters.weight);
   if(filters.thk!=='All')R=R.filter(l=>l.cat!=='paddle'||l.thk===filters.thk);
+  if(filters.grLen&&filters.grLen!=='All')R=R.filter(l=>l.cat!=='paddle'||l.grLen===filters.grLen);
   if(filters.sub&&filters.sub!=='All')R=R.filter(l=>l.cat!=='gear'||l.sub===filters.sub);
   if(filters.gender&&filters.gender!=='All')R=R.filter(l=>l.cat!=='gear'||!l.gender||l.gender===filters.gender||l.gender==='Unisex');
   if(filters.size&&filters.size!=='All')R=R.filter(l=>l.cat!=='gear'||!l.sz||String(l.sz)===String(filters.size));
@@ -1901,7 +1995,7 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
       e('div',{style:{marginBottom:8}},[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:8,padding:'4px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:700,cursor:'pointer'}},locMode==='local'?e(IcTxt,{n:'pin',s:10},`Within ${filters.maxD}mi`):e(IcTxt,{n:'globe',s:10},'Anywhere'))]),
       e('div',{style:{marginBottom:9}},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search all gear, sellers, descriptions…',onSaveSearch:saveSearch})]),
       savedSearches.length>0&&e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:8}},savedSearches.map(ss=>e('div',{key:ss.id,style:{display:'flex',alignItems:'center',gap:5,padding:'4px 8px',borderRadius:12,background:C.tl+'12',border:`1px solid ${C.tl}35`,flexShrink:0}},[
-        e('button',{key:'g',onClick:()=>{setQ(ss.q);if(ss.ctx&&ss.ctx.cat)setCat(ss.ctx.cat);if(ss.ctx&&ss.ctx.filters)setFilters({...initFilters,...ss.ctx.filters});},style:{background:'transparent',border:'none',color:C.tl,fontSize:10,fontWeight:700,cursor:'pointer',padding:0,whiteSpace:'nowrap'}},e(IcTxt,{n:'bookmark',s:10},ss.q)),
+        e('button',{key:'g',onClick:()=>{setQ(ss.q);if(ss.ctx&&ss.ctx.cat)setCat(ss.ctx.cat);if(ss.ctx&&ss.ctx.filters)setFilters(normFilters(ss.ctx.filters));},style:{background:'transparent',border:'none',color:C.tl,fontSize:10,fontWeight:700,cursor:'pointer',padding:0,whiteSpace:'nowrap'}},e(IcTxt,{n:'bookmark',s:10},ss.q)),
         e('button',{key:'x',onClick:()=>delSearch(ss.id),style:{background:'transparent',border:'none',color:C.mt,cursor:'pointer',padding:0,display:'flex'}},[e(Ic,{n:'close',s:10,sw:2.5})]),
       ]))),
       e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:9}},cats.map(cc=>{const ct=catCount(cc);return e('button',{key:cc,onClick:()=>setCat(cc),style:{padding:'5px 11px',borderRadius:14,border:'none',cursor:'pointer',background:cat===cc?C.lm:C.cd,color:cat===cc?'#fff':C.mt,fontSize:11,fontWeight:700,flexShrink:0,display:'flex',alignItems:'center',gap:5}},[cc,e('span',{style:{fontSize:9,opacity:.7}},ct)]);})),
@@ -3860,7 +3954,7 @@ function App(){
   // Stale values from the retired Shoes/Bags/Apparel/Accessories tabs map to Gear.
   const [marketCat,setMarketCat]=useState(()=>{const v=kv.get('marketCat','Paddles');return ['All','Paddles','Gear'].includes(v)?v:'Gear';});
   // Persisted Market filters — hydrated from kv on first render, then re-written by an effect below.
-  const [marketFilters,setMarketFilters]=useState(()=>{const stored=kv.get('marketFilters',null);return stored?{...initFilters,...stored}:{...initFilters};});
+  const [marketFilters,setMarketFilters]=useState(()=>{const stored=kv.get('marketFilters',null);return stored?normFilters(stored):{...initFilters};});
   const [msgs,setMsgs]=useState([...MSGS_INIT]);
   const [activeMsgIdx,setActiveMsgIdx]=useState(null);
   const demoUserList=(ids)=>ids.map(id=>US.find(u=>u.id===id)).filter(Boolean);
