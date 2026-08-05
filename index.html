@@ -1857,9 +1857,10 @@ function NotifPanel({onClose,onListing,onMsgs,notifs,onMarkRead,onGear}){
   ]);
 }
 
-function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch}){
+function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch,demoData,onCreate}){
   const [q,setQ]=useState('');
   const [refresh,setRefresh]=useState(false);
+  const [sampleDismissed,setSampleDismissed]=useState(false);
   let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
   pool.sort((a,b)=>a.dist-b.dist);
   if(q){const lq=q.toLowerCase();pool=pool.filter(l=>[l.brand,l.model,l.sub].filter(Boolean).join(' ').toLowerCase().includes(lq));}
@@ -1886,6 +1887,9 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
       ]),
       e('div',{key:'s'},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search paddles, brands, players…',onSaveSearch:(t)=>{savedSearchesAdd(t,{});onSavedSearch&&onSavedSearch(t);}})]),
     ]),
+    demoData&&!sampleDismissed&&!dataLoading&&e('div',{key:'demo',style:{padding:'12px 14px 0'}},[
+      e(SampleDataBanner,{onDismiss:()=>setSampleDismissed(true),onCreate}),
+    ]),
     dataLoading&&pool.length===0&&e('div',{key:'sk',style:{paddingTop:14}},[e(ListingSkeleton)]),
     q&&pool.length===0&&!dataLoading&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
       e(Ic,{n:'search',s:38,c:C.mt+'66',sw:1.25}),
@@ -1910,7 +1914,11 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   const [sort,setSort]=useState('dist');
   const [viewMode,setViewMode]=useState('list');
   const [savedSearches,setSavedSearches]=useState(()=>savedSearchesGet());
-  const saveSearch=(term)=>{if(!term||!term.trim())return;savedSearchesAdd(term.trim(),{cat,filters});setSavedSearches(savedSearchesGet());showToast&&showToast('Search saved — we\'ll alert you on new matches');};
+  // Saved searches are stored on this device and re-run when tapped. They do NOT
+  // notify: there's no server-side matcher behind them yet (price drops have one,
+  // these don't). Promising an alert we can't deliver is the same trap the push
+  // toggle used to fall into, so the copy says what actually happens.
+  const saveSearch=(term)=>{if(!term||!term.trim())return;savedSearchesAdd(term.trim(),{cat,filters});setSavedSearches(savedSearchesGet());showToast&&showToast('Search saved — tap it any time to run it again');};
   const delSearch=(id)=>{savedSearchesDel(id);setSavedSearches(savedSearchesGet());};
   const cMap={'Paddles':'paddle','Gear':'gear'};
   const fc=filterCount(filters);
@@ -2373,23 +2381,35 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
   };
 
   const toggleBulk=(id)=>setBulkSel(sel=>sel.includes(id)?sel.filter(x=>x!==id):[...sel,id]);
-  const bulkApplyPrice=(pct)=>{
-    bulkSel.forEach(id=>{
-      const L=MY_LS.find(x=>x.id===id);if(!L)return;
-      const base=(localOverrides[id]&&localOverrides[id].price)||L.price;
-      patchLocal(id,{price:Math.max(1,Math.round(base*(1+pct/100)))});
-    });
-    showToast&&showToast(`Updated ${bulkSel.length} listing${bulkSel.length===1?'':'s'}`);
+  // Same failure mode Bump had: this used to only patch local storage, so the
+  // seller saw new prices and every buyer still saw the old ones. It now goes
+  // through onEditListing (a real listings UPDATE) and rolls the local view
+  // back if the write fails, so what's on screen matches what's on the server.
+  const bulkApplyPrice=async(pct)=>{
+    const ids=[...bulkSel];
     setBulkPriceOpen(false);setBulkSel([]);setBulkMode(false);
+    let ok=0,failed=0;
+    for(const id of ids){
+      const L=MY_LS.find(x=>x.id===id);if(!L)continue;
+      const base=(localOverrides[id]&&localOverrides[id].price)||L.price;
+      const next=Math.max(1,Math.round(base*(1+pct/100)));
+      patchLocal(id,{price:next});
+      try{
+        if(onEditListing)await onEditListing(L,{price:next});
+        ok++;
+      }catch(err){
+        patchLocal(id,{price:base});   // revert — the server never took it
+        failed++;
+      }
+    }
+    if(failed>0)showToast&&showToast(`Updated ${ok}, couldn\u2019t update ${failed}. Try those again.`);
+    else showToast&&showToast(`Updated ${ok} listing${ok===1?'':'s'}`);
   };
-  const bulkPause=()=>{bulkSel.forEach(id=>patchLocal(id,{paused:!(localOverrides[id]&&localOverrides[id].paused)}));showToast&&showToast(`${bulkSel.length} listing${bulkSel.length===1?'':'s'} paused/resumed`);setBulkSel([]);setBulkMode(false);};
+  // Bump and Pause were removed. Bump only ever wrote to this device's local
+  // storage, so the listing never actually moved for any other user — it looked
+  // like it worked and did nothing. Pause had no server-side equivalent either.
+  // Sellers who want a listing to stop showing can mark it sold or delete it.
   const bulkSold=async()=>{const ids=[...bulkSel];setBulkSel([]);setBulkMode(false);for(const id of ids){const L=MY_LS.find(x=>x.id===id);if(L&&onMarkSold)await onMarkSold(L);patchLocal(id,{sold:true});}showToast&&showToast(`${ids.length} marked sold`);};
-  const bumpListing=(L)=>{
-    const key='bump:'+L.id;const last=kv.get(key,0);const now=Date.now();
-    if(now-last<1000*60*60*24){showToast&&showToast('You can bump this again in 24 hours');return;}
-    kv.set(key,now);patchLocal(L.id,{bumped:now,ago:'Just now'});
-    showToast&&showToast('Bumped to the top of the feed');
-  };
 
   // Fetch gear + wishlist from DB when me is loaded
   useEffect(()=>{
@@ -2472,7 +2492,6 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
     {id:902,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'sale',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
   ];
   MY_LS.forEach(l=>{const d=pdbFind(l.brand,l.model);if(d)Object.assign(l,d);const ov=localOverrides[l.id];if(ov)Object.assign(l,ov);if(ov&&ov.sold)l.active=false;});
-  MY_LS.sort((a,b)=>((b.bumped||0)-(a.bumped||0)));
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
   const priceDrop=saved.filter(id=>{
@@ -2606,9 +2625,8 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
             e('button',{onClick:()=>setBulkSel(bulkSel.length===MY_LS.filter(l=>l.active).length?[]:MY_LS.filter(l=>l.active).map(l=>l.id)),style:{background:'transparent',border:'none',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',padding:0}},bulkSel.length===MY_LS.filter(l=>l.active).length?'Clear all':'Select all'),
           ]),
           bulkSel.length>0&&e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},[
-            e('button',{key:'p',onClick:()=>setBulkPriceOpen(v=>!v),style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'dollar',s:11,sw:2}),'Price']),
-            e('button',{key:'z',onClick:bulkPause,style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.am}40`,background:C.am+'10',color:C.am,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'pause',s:11,fill:true,sw:0}),'Pause']),
-            e('button',{key:'s',onClick:bulkSold,style:{flex:'1 1 30%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.ok}40`,background:C.ok+'10',color:C.ok,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'check',s:12,sw:2.5}),'Sold']),
+            e('button',{key:'p',onClick:()=>setBulkPriceOpen(v=>!v),style:{flex:'1 1 45%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'dollar',s:11,sw:2}),'Price']),
+            e('button',{key:'s',onClick:bulkSold,style:{flex:'1 1 45%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.ok}40`,background:C.ok+'10',color:C.ok,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'check',s:12,sw:2.5}),'Sold']),
           ]),
           bulkPriceOpen&&bulkSel.length>0&&e('div',{style:{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.dm}`}},[
             e('div',{style:{fontSize:9,color:C.mt,marginBottom:6,fontWeight:700}},'ADJUST PRICE ON SELECTED'),
@@ -2621,13 +2639,13 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
           e('div',{style:{fontSize:10,color:C.mt,maxWidth:240,margin:'0 auto 10px',lineHeight:1.5}},'List the paddles you no longer play with and turn them into cash.'),
           e('button',{onClick:onCreate,style:{padding:'8px 16px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'+ Post a Listing'),
         ]),
-        MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${bulkSel.includes(l.id)?C.lm:C.lm+'40'}`,padding:9,marginBottom:8,opacity:l.paused?.6:1}},[
+        MY_LS.filter(l=>l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${bulkSel.includes(l.id)?C.lm:C.lm+'40'}`,padding:9,marginBottom:8}},[
           e('div',{onClick:()=>bulkMode?toggleBulk(l.id):onView(l),style:{display:'flex',gap:9,alignItems:'center',cursor:'pointer',marginBottom:8}},[
             bulkMode&&e('div',{key:'cb',style:{width:20,height:20,borderRadius:6,border:`2px solid ${bulkSel.includes(l.id)?C.lm:C.bd}`,background:bulkSel.includes(l.id)?C.lm:'transparent',color:'#fff',fontSize:11,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},bulkSel.includes(l.id)?e(Ic,{n:'check',s:13,c:'#fff',sw:3}):null),
             e(PSv,{key:'p',col:C.lm+'55',sz:28}),
             e('div',{key:'i',style:{flex:1}},[
               e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),
-              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model),l.paused&&e('span',{style:{fontSize:8,fontWeight:800,color:C.am,background:C.am+'18',borderRadius:5,padding:'1px 5px'}},'PAUSED'),l.bumped&&e(IcTxt,{n:'arrowUp',s:9,style:{fontSize:8,fontWeight:800,color:C.lm,background:C.lm+'18',borderRadius:5,padding:'1px 5px'}},'BUMPED')]),
+              e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},l.model)]),
               e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`${l.views} views · ${l.saves} saved · ${l.ago}`),
             ]),
             e('div',{key:'pr',style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(CB,{c:l.cond})]),
@@ -2635,8 +2653,6 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
           l.views>30&&l.saves===0&&e('div',{style:{fontSize:9,color:C.am,background:C.am+'15',padding:'5px 8px',borderRadius:7,marginBottom:6,lineHeight:1.4}},'High views but no saves — try lowering the price to attract offers'),
           !bulkMode&&e('div',{style:{display:'flex',gap:5,marginBottom:5}},[
             e('button',{key:'an',onClick:()=>setAnalyticsFor(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.pu}40`,background:C.pu+'10',color:C.pu,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'chart',s:12}),'Insights']),
-            e('button',{key:'bp',onClick:()=>bumpListing(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'arrowUp',s:12,sw:2.25}),'Bump']),
-            e('button',{key:'pz',onClick:()=>{patchLocal(l.id,{paused:!l.paused});showToast&&showToast(l.paused?'Listing resumed':'Listing paused');},style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.am}40`,background:'transparent',color:C.am,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:l.paused?'play':'pause',s:11,fill:true,sw:0}),l.paused?'Resume':'Pause']),
           ]),
           !bulkMode&&e('div',{style:{display:'flex',gap:5}},[
             e('button',{onClick:()=>setEditingListing(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.tx,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'edit',s:11}),'Edit']),
@@ -3034,7 +3050,32 @@ function AuthScreen({onSignedIn}){
     }
     setBusy(false);
   };
+  // Password reset. There was no way out of a forgotten password before this —
+  // the only paths off the sign-in screen were a correct password or Google.
+  // The confirmation copy is deliberately the same whether or not the address
+  // has an account, so this can't be used to enumerate who's registered.
+  const sendReset=async()=>{
+    setErr('');
+    const addr=(email||'').trim();
+    if(!addr||!addr.includes('@')){setErr('Enter the email address on your account first.');return;}
+    setBusy(true);
+    try{
+      await sb.auth.resetPasswordForEmail(addr,{redirectTo:window.location.origin+window.location.pathname});
+      setMode('resetSent');
+    }catch(ex){
+      setErr('Could not send the reset email. Check your connection and try again.');
+    }
+    setBusy(false);
+  };
   const IS={width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:13,outline:'none',marginBottom:10};
+  if(mode==='resetSent')return e('div',{style:{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',padding:'0 22px',background:C.bg,textAlign:'center'}},[
+    e('div',{key:'i',style:{marginBottom:16,display:'flex',justifyContent:'center'}},[e(Ic,{n:'mail',s:38,c:C.lm,sw:1.5})]),
+    e('div',{key:'t',style:{fontSize:18,fontWeight:800,color:C.tx,marginBottom:8}},'Check your email'),
+    e('div',{key:'b',style:{fontSize:12,color:C.mt,lineHeight:1.6,marginBottom:24}},`If an account exists for ${email}, we\u2019ve sent a link to reset your password. It expires in an hour. Check your spam folder if it hasn\u2019t landed in a few minutes.`),
+    e('button',{key:'go',onClick:()=>{setMode('signin');setPw('');},style:{padding:'12px 0',borderRadius:11,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff',marginBottom:10}},'Back to Sign In'),
+    e('button',{key:'rs',onClick:sendReset,disabled:busy,style:{background:'none',border:'none',color:C.mt,fontSize:11,cursor:busy?'default':'pointer'}},busy?'Sending\u2026':'Resend the link'),
+  ]);
+
   if(mode==='confirm')return e('div',{style:{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',padding:'0 22px',background:C.bg,textAlign:'center'}},[
     e('div',{style:{marginBottom:16,display:'flex',justifyContent:'center'}},[e(Ic,{n:'mail',s:38,c:C.lm,sw:1.5})]),
     e('div',{style:{fontSize:18,fontWeight:800,color:C.tx,marginBottom:8}},'Check your email'),
@@ -3073,6 +3114,7 @@ function AuthScreen({onSignedIn}){
     e('input',{key:'pw',value:pw,onChange:ev=>setPw(ev.target.value),placeholder:'Password',type:'password',style:IS,onKeyDown:ev=>ev.key==='Enter'&&submit()}),
     err&&e('div',{key:'er',style:{fontSize:11,color:C.rd,marginBottom:10,padding:'8px 11px',background:C.rd+'15',borderRadius:8,border:`1px solid ${C.rd}30`}},err),
     e('button',{key:'go',onClick:submit,disabled:busy||!email||!pw,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(busy||!email||!pw)?C.dm:C.cta,border:'none',cursor:busy?'default':'pointer',fontSize:14,fontWeight:800,color:'#fff',marginBottom:12}},busy?'...':mode==='signin'?'Sign In':'Create Account'),
+    mode==='signin'&&e('button',{key:'fp',onClick:sendReset,disabled:busy,style:{width:'100%',background:'none',border:'none',color:C.lm,fontSize:11,fontWeight:700,cursor:busy?'default':'pointer',marginBottom:10,padding:'2px 0'}},'Forgot your password?'),
     e('button',{key:'tg',onClick:()=>{setMode(m=>m==='signin'?'signup':'signin');setErr('');},style:{background:'none',border:'none',color:C.mt,fontSize:11,cursor:'pointer'}},mode==='signin'?'New here? Create an account':'Already have an account? Sign in'),
   ]);
 }
@@ -3217,6 +3259,22 @@ function OfflineBanner(){
   return e('div',{role:'status',style:{position:'absolute',top:0,left:0,right:0,zIndex:38,background:C.mt,color:'#fff',padding:'6px 12px',fontSize:10.5,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:7,animation:'riseIn var(--dur-2) var(--ease-out)'}},[
     e(Ic,{key:'i',n:'alert',s:12,c:'#fff'}),
     e('span',{key:'t'},'You\u2019re offline \u2014 we\u2019ll send anything you queue once you reconnect'),
+  ]);
+}
+
+// --- Sample-data notice ---
+// Shown in the feed when the listings table is empty and we're rendering the
+// seeded demo catalogue. Sits inline rather than as a floating banner so it
+// scrolls away instead of nagging, and is dismissible for the session.
+function SampleDataBanner({onDismiss,onCreate}){
+  return e('div',{style:{background:C.am+'12',border:`1px solid ${C.am}40`,borderRadius:12,padding:'10px 12px',marginBottom:11,display:'flex',gap:9,alignItems:'flex-start'}},[
+    e('div',{key:'i',style:{display:'flex',flexShrink:0,marginTop:1}},[e(Ic,{n:'info',s:15,c:C.am})]),
+    e('div',{key:'t',style:{flex:1,minWidth:0}},[
+      e('div',{style:{fontSize:11.5,fontWeight:800,color:C.tx}},'These are sample listings'),
+      e('div',{style:{fontSize:10,color:C.mt,lineHeight:1.5,marginTop:2}},'Nobody has posted in your area yet, so we\u2019re showing example gear to give you a feel for the app. These sellers aren\u2019t real \u2014 messages and offers won\u2019t reach anyone.'),
+      e('button',{onClick:onCreate,style:{marginTop:7,padding:'6px 12px',borderRadius:8,border:'none',background:C.lm,color:'#fff',fontSize:10.5,fontWeight:800,cursor:'pointer'}},'Post the first real listing'),
+    ]),
+    e('button',{key:'x',onClick:onDismiss,'aria-label':'Dismiss',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:2,margin:-2,flexShrink:0}},[e(Ic,{n:'close',s:14,sw:2})]),
   ]);
 }
 
@@ -3588,9 +3646,29 @@ function MeetupModal({seller,onClose,onConfirm}){
   const [spot,setSpot]=useState(SPOTS[0]);
   const [custom,setCustom]=useState('');
   const [when,setWhen]=useState(TIMES[2]);
-  const [time,setTime]=useState('10:00 AM');
+  const [time,setTime]=useState('10:00');
+  // "Pick a day" used to send the literal string "Pick a day" as the date.
+  // It now opens a real date field, and the proposal isn't sendable until a
+  // day is actually chosen.
+  const [customDate,setCustomDate]=useState('');
+  const isPick=when===TIMES[3];
+  const todayISO=new Date().toISOString().slice(0,10);
+  const fmtDate=(iso)=>{
+    if(!iso)return '';
+    const [y,m,d]=iso.split('-').map(Number);
+    const dt=new Date(y,m-1,d);
+    return dt.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  };
+  const fmtTime=(t)=>{
+    if(!t)return '';
+    const [hh,mm]=t.split(':').map(Number);
+    if(!isFinite(hh))return t;
+    const ap=hh>=12?'PM':'AM';const h12=hh%12===0?12:hh%12;
+    return `${h12}:${String(mm||0).padStart(2,'0')} ${ap}`;
+  };
   const place=spot.startsWith('Other')?custom:spot;
-  const valid=place&&place.trim();
+  const whenLabel=isPick?fmtDate(customDate):when;
+  const valid=!!(place&&place.trim())&&(!isPick||!!customDate)&&!!time;
   return e('div',{style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'flex-end',zIndex:45}},[
     e('div',{style:{width:'100%',background:C.bg,borderTopLeftRadius:22,borderTopRightRadius:22,padding:18,maxHeight:'88%',overflowY:'auto',animation:'sheetIn var(--dur-3) var(--ease-out)'}},[
       e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},[e(IcTxt,{n:'pin',s:16,gap:7,style:{fontSize:15,fontWeight:800,color:C.tx}},'Confirm Meet-up'),e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.mt,cursor:'pointer',display:'flex',padding:4,margin:-4}},[e(Ic,{n:'close',s:17,sw:2})])]),
@@ -3598,9 +3676,10 @@ function MeetupModal({seller,onClose,onConfirm}){
       e('div',{key:'pl',style:{marginBottom:12}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'WHERE'),e('div',{style:{display:'flex',flexDirection:'column',gap:6}},SPOTS.map(s=>e('button',{key:s,onClick:()=>setSpot(s),style:{textAlign:'left',padding:'9px 11px',borderRadius:10,border:`1px solid ${spot===s?C.lm:C.bd}`,background:spot===s?C.lm+'15':C.cd,color:spot===s?C.lm:C.tx,fontSize:11,fontWeight:600,cursor:'pointer'}},s)))]),
       spot.startsWith('Other')&&e('input',{key:'cust',value:custom,onChange:ev=>setCustom(ev.target.value),placeholder:'Enter a public meeting place',style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none',marginBottom:12}}),
       e('div',{key:'wh',style:{marginBottom:12}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'WHEN'),e('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},TIMES.map(t=>e('button',{key:t,onClick:()=>setWhen(t),style:{padding:'7px 12px',borderRadius:9,border:`1px solid ${when===t?C.lm:C.bd}`,background:when===t?C.lm+'15':C.cd,color:when===t?C.lm:C.mt,fontSize:11,fontWeight:600,cursor:'pointer'}},t)))]),
-      e('div',{key:'tm',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'TIME'),e('input',{value:time,onChange:ev=>setTime(ev.target.value),style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
+      isPick&&e('input',{key:'dt',type:'date',value:customDate,min:todayISO,onChange:ev=>setCustomDate(ev.target.value),'aria-label':'Meet-up date',style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${customDate?C.bd:C.am+'70'}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none',marginBottom:12}}),
+      e('div',{key:'tm',style:{marginBottom:14}},[e('label',{style:{fontSize:9,color:C.mt,fontWeight:700,marginBottom:6,display:'block'}},'TIME'),e('input',{type:'time',value:time,onChange:ev=>setTime(ev.target.value),'aria-label':'Meet-up time',style:{width:'100%',padding:'10px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'}})]),
       e('div',{key:'sf',style:{fontSize:10,color:C.tl,background:C.tl+'10',borderRadius:9,padding:'8px 11px',marginBottom:14,border:`1px solid ${C.tl}30`}},e(IcTxt,{n:'shieldCheck',s:13},'Public place + daylight keeps both of you safe.')),
-      e('button',{key:'go',onClick:()=>valid&&onConfirm({place,when,time}),disabled:!valid,style:{width:'100%',padding:'13px 0',borderRadius:12,background:valid?C.lm:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:13,fontWeight:800,color:'#fff'}},'Send Meet-up Proposal'),
+      e('button',{key:'go',onClick:()=>valid&&onConfirm({place,when:whenLabel,time:fmtTime(time)}),disabled:!valid,style:{width:'100%',padding:'13px 0',borderRadius:12,background:valid?C.lm:C.dm,border:'none',cursor:valid?'pointer':'default',fontSize:13,fontWeight:800,color:valid?'#fff':C.mt}},isPick&&!customDate?'Pick a date to continue':'Send Meet-up Proposal'),
     ]),
   ]);
 }
@@ -4066,6 +4145,10 @@ function App(){
   // --- LISTINGS FETCH ---
   const [dataVer,setDataVer]=useState(0);
   const [dataLoading,setDataLoading]=useState(false);
+  // True when the listings table came back empty and we're showing seeded
+  // sample data. Drives the "Sample listings" banner so nobody tries to buy
+  // from a seller who isn't there.
+  const [demoData,setDemoData]=useState(false);
   // Cursor-based pagination state. `listingsCursor` holds the oldest created_at we've fetched.
   // `hasMoreListings` lets the UI hide the "Load more" affordance when we've reached the end.
   const LISTINGS_PAGE_SIZE=50;
@@ -4084,9 +4167,14 @@ function App(){
       .limit(LISTINGS_PAGE_SIZE);
     if(error){console.error('listings fetch',error);setDataLoading(false);showError('Could not load listings. Pull down to retry.');return;}
     if(!rows||rows.length===0){
-      // No real listings yet — keep the demo data visible
+      // No real listings yet — keep the seeded sample data visible so the app
+      // isn't an empty shell, but flag it so the UI can say so. Showing seeded
+      // sellers as if they were real neighbours means someone messages a person
+      // who doesn't exist and waits for a reply that can't come.
+      setDemoData(true);
       setDataLoading(false);setDataVer(v=>v+1);setHasMoreListings(false);return;
     }
+    setDemoData(false);
     // Build users map from sellers
     const usersMap=new Map();
     (rows||[]).forEach(r=>{if(r.seller&&!usersMap.has(r.seller.id))usersMap.set(r.seller.id,profileToUser(r.seller));});
@@ -4777,7 +4865,7 @@ function App(){
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
           view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>setSellerView(u),onReport:setReportTarget}),
-          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Saved — check Market for your saved searches')}),
+          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{setCrt(true);setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
           !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
