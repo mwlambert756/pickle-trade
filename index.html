@@ -3239,13 +3239,19 @@ function OnboardingBanner({step,onComplete,onSkip,onOpenSettings,onOpenGear}){
 
 function Toast({msg,onDismiss}){
   useEffect(()=>{const t=setTimeout(onDismiss,2800);return()=>clearTimeout(t);},[onDismiss]);
-  return e('div',{style:{position:'absolute',bottom:100,left:14,right:14,zIndex:40,display:'flex',justifyContent:'center',pointerEvents:'none'}},[
+  // z-index 90: toasts have to clear every dialog in the app. At 40 they were
+  // painted underneath Blocked Users, Legal, Report, Verification and the
+  // confirm dialogs (50-60), so confirmations fired from inside those — e.g.
+  // "Unblocked Marcus" — were invisible and the action looked like it failed.
+  return e('div',{style:{position:'absolute',bottom:100,left:14,right:14,zIndex:90,display:'flex',justifyContent:'center',pointerEvents:'none'}},[
     e('div',{style:{background:C.tx===LIGHT_C.tx?C.tx:'#3A4452',color:'#fff',borderRadius:12,padding:'10px 16px',fontSize:12,fontWeight:600,boxShadow:'var(--sh-4)',animation:'riseIn var(--dur-3) var(--ease-spring)',maxWidth:300,textAlign:'center'}},msg),
   ]);
 }
 
 function ErrorBanner({msg,onDismiss}){
-  return e('div',{style:{position:'absolute',top:46,left:14,right:14,zIndex:35,background:C.rd,color:'#fff',borderRadius:12,padding:'9px 12px',fontSize:11,fontWeight:600,boxShadow:'0 4px 16px rgba(239,68,68,0.3)',animation:'scaleIn var(--dur-2) var(--ease-spring)',display:'flex',alignItems:'center',gap:8}},[
+  // z-index 89 — same reasoning as Toast. An error raised while a dialog is
+  // open is exactly the moment the user most needs to see it.
+  return e('div',{style:{position:'absolute',top:46,left:14,right:14,zIndex:89,background:C.rd,color:'#fff',borderRadius:12,padding:'9px 12px',fontSize:11,fontWeight:600,boxShadow:'0 4px 16px rgba(239,68,68,0.3)',animation:'scaleIn var(--dur-2) var(--ease-spring)',display:'flex',alignItems:'center',gap:8}},[
     e(Ic,{key:'i',n:'alert',s:14,c:'#fff'}),
     e('span',{key:'m',style:{flex:1}},msg),
     e('button',{key:'x',onClick:onDismiss,'aria-label':'Dismiss',style:{background:'transparent',border:'none',color:'#fff',cursor:'pointer',padding:0,opacity:.85,display:'flex'}},[e(Ic,{n:'close',s:14,sw:2.25})]),
@@ -3256,7 +3262,7 @@ function ErrorBanner({msg,onDismiss}){
 // Network-dependent actions (posting, offers, messages) failed with a generic
 // error when the device dropped connection. This names the actual cause.
 function OfflineBanner(){
-  return e('div',{role:'status',style:{position:'absolute',top:0,left:0,right:0,zIndex:38,background:C.mt,color:'#fff',padding:'6px 12px',fontSize:10.5,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:7,animation:'riseIn var(--dur-2) var(--ease-out)'}},[
+  return e('div',{role:'status',style:{position:'absolute',top:0,left:0,right:0,zIndex:88,background:C.mt,color:'#fff',padding:'6px 12px',fontSize:10.5,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:7,animation:'riseIn var(--dur-2) var(--ease-out)'}},[
     e(Ic,{key:'i',n:'alert',s:12,c:'#fff'}),
     e('span',{key:'t'},'You\u2019re offline \u2014 we\u2019ll send anything you queue once you reconnect'),
   ]);
@@ -4491,8 +4497,7 @@ function App(){
   };
   // Relist: open the create overlay with key fields pre-filled from the sold listing.
   const handleRelist=(L)=>{
-    setCrtPrefill({brand:L.brand,model:L.model,cat:L.cat||'paddle',cond:'Like New',desc:L.desc||''});
-    setCrt(true);
+    openPanel('create',{brand:L.brand,model:L.model,cat:L.cat||'paddle',cond:'Like New',desc:L.desc||''});
     showToast('Review and post — fields pre-filled from previous listing');
   };
   // Update bio: writes to profiles, updates local me.
@@ -4743,7 +4748,7 @@ function App(){
     const meta=savedMeta&&savedMeta[id];
     return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
   }).length;
-  const handleNav=(id)=>{if(id==='sell'){track('nav_sell',{});setCrt(true);setView(null);return;}track('nav_tab',{tab:id});setTab(id);setView(null);if(id==='messages'&&activeMsgIdx===null);};
+  const handleNav=(id)=>{if(id==='sell'){track('nav_sell',{});openPanel('create');setView(null);return;}track('nav_tab',{tab:id});closePanels();setTab(id);setView(null);};
 
   // --- TRUST & SAFETY HANDLERS ---
   const submitReport=async({reason,detail,alsoBlock,error})=>{
@@ -4781,14 +4786,39 @@ function App(){
       showError('Could not delete your account. Email '+LEGAL.supportEmail+' and we\'ll handle it.');
     }
   };
+  // --- FULL-SCREEN PANEL ROUTING ---
+  // Create, Notifications, Saved, Settings, Offer and Seller Profile are all
+  // full-screen and all render at the same z-index, so nothing decided which
+  // one won except their order in the render array below. Opening a second one
+  // while the first was still open mounted it *underneath* — tapping the bell
+  // from inside Saved appeared to do nothing until you backed out of Saved.
+  //
+  // Only one of these can be open at a time, so they now go through one setter
+  // that clears the group first. The last thing tapped is the thing shown.
+  // Stacked dialogs (Legal, Blocked, Condition Guide, Report, Verify, confirms)
+  // are deliberately NOT in this group — they're opened *from* a panel and are
+  // supposed to sit on top of it.
+  const closePanels=()=>{
+    setCrt(false);setCrtPrefill(null);
+    setNotifOpen(false);setSavedOpen(false);setSettingsOpen(false);
+    setOfferOpen(null);setSellerView(null);
+  };
+  const openPanel=(name,payload)=>{
+    closePanels();
+    if(name==='create'){setCrtPrefill(payload||null);setCrt(true);}
+    else if(name==='notif')setNotifOpen(true);
+    else if(name==='saved')setSavedOpen(true);
+    else if(name==='settings')setSettingsOpen(true);
+    else if(name==='offer')setOfferOpen(payload);
+    else if(name==='seller')setSellerView(payload);
+  };
   // The wordmark doubles as "home". It's the one nav control that stays visible
   // everywhere — the tab bar hides behind overlays and listing detail — so it has
   // to tear the whole stack down, not just switch tabs underneath what's on top.
   const goHome=()=>{
     haptic('light');
-    setCrt(false);setCrtPrefill(null);
-    setNotifOpen(false);setSavedOpen(false);setSettingsOpen(false);setOfferOpen(null);
-    setSellerView(null);setBuyConfirm(null);setReviewFor(null);
+    closePanels();
+    setBuyConfirm(null);setReviewFor(null);
     setSafetyOpen(false);setCondGuideOpen(false);setVerifyOpen(false);
     setActiveMsgIdx(null);
     setView(null);setTab('feed');
@@ -4813,8 +4843,8 @@ function App(){
       e('div',{key:'sb',style:{height:42,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 18px',borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
         e('button',{onClick:goHome,'aria-label':'DINK Exchange — go to Discover',title:'Go to Discover',style:{display:'flex',alignItems:'center',gap:6,background:'transparent',border:'none',padding:0,cursor:'pointer'}},[e('span',{key:'d',style:{fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},'DINK'),e('span',{key:'x',style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
         e('div',{style:{display:'flex',alignItems:'center',gap:14}},[
-          e('button',{onClick:()=>setSavedOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:saved.length>0?C.lm:C.mt,lineHeight:1,display:'flex'}},[e(Ic,{key:'i',n:'heart',s:17,fill:saved.length>0}),saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
-          e('button',{onClick:()=>setNotifOpen(true),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:C.lm,display:'flex'}},[e(Ic,{key:'i',n:'bell',s:17}),notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
+          e('button',{onClick:()=>openPanel('saved'),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:saved.length>0?C.lm:C.mt,lineHeight:1,display:'flex'}},[e(Ic,{key:'i',n:'heart',s:17,fill:saved.length>0}),saved.length>0&&e('span',{style:{position:'absolute',top:-4,right:-5,minWidth:13,height:13,borderRadius:7,background:priceDrop>0?C.lm:C.tl,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},saved.length)]),
+          e('button',{onClick:()=>openPanel('notif'),style:{background:'transparent',border:'none',cursor:'pointer',position:'relative',padding:0,color:C.lm,display:'flex'}},[e(Ic,{key:'i',n:'bell',s:17}),notifUnread>0&&e('span',{style:{position:'absolute',top:-3,right:-4,minWidth:14,height:14,borderRadius:7,background:C.rd,color:'#fff',fontSize:9,fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px'}},notifUnread)]),
         ]),
       ]),
       e('div',{key:'mn',style:{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}},[
@@ -4862,13 +4892,13 @@ function App(){
           }}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'Listing posted')]),
-        !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{setSettingsOpen(true);setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
+        !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{openPanel('settings');setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>setOfferOpen(view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>setSellerView(u),onReport:setReportTarget}),
-          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{setCrt(true);setView(null);}}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
+          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>setSavedOpen(true),onOpenSettings:()=>setSettingsOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>setCrt(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>setSellerView(u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
       !overlayOpen&&!view&&!fullScreenModal&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
