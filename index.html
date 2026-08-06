@@ -34,7 +34,18 @@ html,body,#root{
   text-rendering:optimizeLegibility;
   font-synthesis-weight:none;
   height:100%;
+  overflow:hidden;
 }
+/* The frame below is sized to exactly match the viewport, so the outer
+   document should never need to scroll. But 100dvh recalculates live as a
+   mobile browser's address bar collapses/expands, and if the outer page is
+   even ambiguously scrollable, a touch-scroll gesture inside a listing can
+   get captured by the page (triggering that address-bar animation) instead
+   of being handed to the listing's own inner scroll area — so the content
+   never actually moves. Locking html/body/#root to overflow:hidden removes
+   that ambiguity entirely: nothing above the app frame can ever scroll, so
+   every gesture is unambiguously routed to whichever inner element (the
+   listing's "sc" div) actually has overflow:auto and room to move. */
 
 /* ============================ APP SHELL / FRAME ============================
    The app used to render into a hard-coded 380x780px box. On any window
@@ -65,6 +76,15 @@ html,body,#root{
   flex-direction:column;
   position:relative;
   box-shadow:var(--sh-4),0 0 0 1px rgba(16,24,40,.08);
+  overscroll-behavior:contain;
+}
+/* Every inner scroll region (listing detail, saved list, messages, etc. —
+   anything using overflowY:'auto') gets momentum scrolling on iOS and stops
+   scroll-chaining so a swipe that runs out of content doesn't bounce the
+   frame or the page behind it. Applying this to every descendant is safe —
+   it's a no-op on elements that aren't themselves scrollable. */
+.app-frame *{
+  -webkit-overflow-scrolling:touch;
 }
 /* Phones and any narrow window: full-bleed, no wasted chrome, and the frame
    is exactly the visible viewport so nothing can sit below the fold. */
