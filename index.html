@@ -1,4 +1,5 @@
 
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..900&display=swap" rel="stylesheet">
@@ -32,6 +33,52 @@ html,body,#root{
   -moz-osx-font-smoothing:grayscale;
   text-rendering:optimizeLegibility;
   font-synthesis-weight:none;
+  height:100%;
+}
+
+/* ============================ APP SHELL / FRAME ============================
+   The app used to render into a hard-coded 380x780px box. On any window
+   shorter than ~808px the bottom of that box — which is where the pinned
+   Buy Now / Offer footer on a listing lives — fell outside the viewport, so
+   the primary purchase action looked missing. The frame is now bounded by
+   the real viewport instead of a fixed pixel height: it keeps the centered
+   phone-card look on a roomy desktop window, shrinks to fit a short one, and
+   goes edge-to-edge on an actual phone. Everything inside is already a flex
+   column with its own scroll region, so shrinking the frame just shortens
+   the scroll area — the header and footer stay pinned and visible. */
+.app-stage{
+  display:flex;
+  justify-content:center;
+  background:#E5E7EB;
+  padding:14px 0;
+  min-height:100vh;
+  min-height:100dvh;
+}
+.app-frame{
+  width:380px;
+  height:780px;
+  max-height:calc(100vh - 28px);
+  max-height:calc(100dvh - 28px);
+  border-radius:34px;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  position:relative;
+  box-shadow:var(--sh-4),0 0 0 1px rgba(16,24,40,.08);
+}
+/* Phones and any narrow window: full-bleed, no wasted chrome, and the frame
+   is exactly the visible viewport so nothing can sit below the fold. */
+@media(max-width:430px){
+  .app-stage{padding:0;min-height:100vh;min-height:100dvh}
+  .app-frame{
+    width:100%;
+    max-width:100%;
+    height:100vh;
+    height:100dvh;
+    max-height:none;
+    border-radius:0;
+    box-shadow:none;
+  }
 }
 body{
   font-feature-settings:'cv05' 1,'cv08' 1,'cv11' 1,'ss01' 1; /* single-storey a/g, open 4, disambiguated I/l */
@@ -2341,6 +2388,12 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
   const [editingListing,setEditingListing]=useState(null);
   const [confirmingDel,setConfirmingDel]=useState(null);
   const [confirmingSold,setConfirmingSold]=useState(null);
+  // A sold listing used to stay in the profile's SOLD list forever with no way
+  // to clear it. Removing archives it rather than deleting: the sale record is
+  // the seller's own history, and Relist reads from it, so a one-tap Undo and a
+  // "show removed" toggle keep it recoverable instead of destroying it.
+  const [confirmingRemove,setConfirmingRemove]=useState(null);
+  const [showArchived,setShowArchived]=useState(false);
   const [editingBio,setEditingBio]=useState(false);
   const [editingWishBudget,setEditingWishBudget]=useState(null);
   const [avatarUrl,setAvatarUrl]=useState(()=>kv.get('avatar',null));
@@ -2410,6 +2463,17 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
   // like it worked and did nothing. Pause had no server-side equivalent either.
   // Sellers who want a listing to stop showing can mark it sold or delete it.
   const bulkSold=async()=>{const ids=[...bulkSel];setBulkSel([]);setBulkMode(false);for(const id of ids){const L=MY_LS.find(x=>x.id===id);if(L&&onMarkSold)await onMarkSold(L);patchLocal(id,{sold:true});}showToast&&showToast(`${ids.length} marked sold`);};
+
+  // Archive / restore a sold listing on the profile. This only affects the
+  // seller's own view — the listing is already hidden from buyers the moment
+  // it's marked sold, so nothing here needs to touch the server.
+  const archiveSold=(l)=>{patchLocal(l.id,{archived:true});showToast&&showToast('Removed from your sold list');};
+  const restoreSold=(l)=>{patchLocal(l.id,{archived:false});showToast&&showToast('Restored');};
+  const clearAllSold=()=>{
+    const ids=MY_LS.filter(l=>!l.active&&!l.archived).map(l=>l.id);
+    ids.forEach(id=>patchLocal(id,{archived:true}));
+    showToast&&showToast(`Cleared ${ids.length} sold listing${ids.length===1?'':'s'}`);
+  };
 
   // Fetch gear + wishlist from DB when me is loaded
   useEffect(()=>{
@@ -2660,11 +2724,33 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
             e('button',{onClick:()=>setConfirmingDel(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.rd}40`,background:'transparent',color:C.rd,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'trash',s:11}),'Delete']),
           ]),
         ])),
-        MY_LS.filter(l=>!l.active).length>0&&e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginTop:14,marginBottom:8}},'SOLD'),
-        MY_LS.filter(l=>!l.active).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.dm}`,padding:9,marginBottom:8}},[
+        MY_LS.filter(l=>!l.active&&!l.archived).length>0&&e('div',{key:'sh',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14,marginBottom:8}},[
+          e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5}},'SOLD'),
+          e('button',{onClick:()=>setConfirmingRemove('all'),style:{background:'transparent',border:'none',color:C.mt,fontSize:10,fontWeight:700,cursor:'pointer',padding:0}},'Clear all'),
+        ]),
+        MY_LS.filter(l=>!l.active&&!l.archived).map(l=>e('div',{key:l.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.dm}`,padding:9,marginBottom:8}},[
           e('div',{style:{display:'flex',gap:9,alignItems:'center',marginBottom:6}},[e(PSv,{col:C.mt+'55',sz:28}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},listTitle(l)),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Sold ${l.soldDate} to ${l.soldTo}`)]),e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${l.soldPrice}`),e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700}},'SOLD')])]),
-          e('button',{onClick:()=>{onRelist&&onRelist(l);},style:{width:'100%',padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'refresh',s:11}),'Relist']),
+          e('div',{style:{display:'flex',gap:5}},[
+            e('button',{key:'rl',onClick:()=>{onRelist&&onRelist(l);},style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.lm}40`,background:C.lm+'10',color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'refresh',s:11}),'Relist']),
+            e('button',{key:'rm',onClick:()=>setConfirmingRemove(l),style:{flex:1,padding:'7px 0',borderRadius:8,border:`1px solid ${C.bd}`,background:'transparent',color:C.mt,fontSize:10,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:4}},[e(Ic,{key:'i',n:'close',s:11,sw:2.5}),'Remove']),
+          ]),
         ])),
+        // Removed sold listings stay recoverable behind a collapsed drawer.
+        MY_LS.filter(l=>!l.active&&l.archived).length>0&&e('div',{key:'ar',style:{marginTop:12}},[
+          e('button',{key:'t',onClick:()=>setShowArchived(v=>!v),style:{width:'100%',background:'transparent',border:'none',padding:'6px 0',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:5,color:C.mt,fontSize:10,fontWeight:700}},[
+            e(Ic,{key:'i',n:'chevron',s:11,style:{transform:showArchived?'rotate(90deg)':'none'}}),
+            `${showArchived?'Hide':'Show'} removed (${MY_LS.filter(l=>!l.active&&l.archived).length})`,
+          ]),
+          showArchived&&e('div',{key:'l'},MY_LS.filter(l=>!l.active&&l.archived).map(l=>e('div',{key:l.id,style:{background:'transparent',borderRadius:11,border:`1px dashed ${C.bd}`,padding:9,marginBottom:8,display:'flex',alignItems:'center',gap:9,opacity:.75}},[
+            e(PSv,{key:'p',col:C.mt+'35',sz:24}),
+            e('div',{key:'i',style:{flex:1,minWidth:0}},[
+              e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},listEyebrow(l)),
+              e('div',{style:{fontSize:11,fontWeight:700,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},listTitle(l)),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},`Sold $${l.soldPrice} · ${l.soldDate}`),
+            ]),
+            e('button',{key:'u',onClick:()=>restoreSold(l),style:{background:'transparent',border:`1px solid ${C.bd}`,borderRadius:8,color:C.lm,fontSize:10,fontWeight:700,cursor:'pointer',padding:'6px 10px',flexShrink:0}},'Restore'),
+          ]))),
+        ]),
       ]),
       tab==='community'&&e('div',{key:'cmw'},[
         e('div',{key:'sub',style:{display:'flex',gap:6,marginBottom:11,overflowX:'auto'}},[['network','Network','users'],['leaderboard','Top Sellers','trophy'],['players','Players Nearby','paddle']].map(([id,lbl,ico])=>e('button',{key:id,onClick:()=>setCommSub(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${commSub===id?C.lm:C.bd}`,background:commSub===id?C.lm+'15':'transparent',color:commSub===id?C.lm:C.mt,fontSize:11,fontWeight:commSub===id?800:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:ico,s:12}),lbl]))),
@@ -2677,6 +2763,14 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
     editingListing&&e(EditListingModal,{key:'el',L:editingListing,onClose:()=>setEditingListing(null),onSave:async(patch)=>{if(onEditListing)await onEditListing(editingListing,patch);},showToast,showError:showToast}),
     confirmingDel&&e(ConfirmModal,{key:'cdl',title:'Delete this listing?',body:'This permanently removes the listing. This action cannot be undone.',confirmLabel:'Delete',cancelLabel:'Keep',danger:true,onCancel:()=>setConfirmingDel(null),onConfirm:async()=>{const t=confirmingDel;setConfirmingDel(null);if(onDeleteListing)await onDeleteListing(t);showToast&&showToast('Listing deleted');}}),
     confirmingSold&&e(ConfirmModal,{key:'cms',title:'Mark as sold?',body:'Buyers will no longer see this listing in feeds or search.',confirmLabel:'Mark Sold',cancelLabel:'Cancel',onCancel:()=>setConfirmingSold(null),onConfirm:async()=>{const t=confirmingSold;setConfirmingSold(null);if(onMarkSold)await onMarkSold(t);showToast&&showToast('Listing marked as sold');}}),
+    confirmingRemove&&e(ConfirmModal,{key:'crm',
+      title:confirmingRemove==='all'?'Clear your sold list?':'Remove from sold list?',
+      body:confirmingRemove==='all'
+        ?'Hides every sold listing from this page. Nothing is deleted — you can bring them back from "Show removed".'
+        :'Hides this from your sold list. The sale record is kept, so you can restore or relist it later.',
+      confirmLabel:confirmingRemove==='all'?'Clear all':'Remove',cancelLabel:'Cancel',
+      onCancel:()=>setConfirmingRemove(null),
+      onConfirm:()=>{const t=confirmingRemove;setConfirmingRemove(null);if(t==='all')clearAllSold();else archiveSold(t);}}),
     editingBio&&e(BioEditModal,{key:'eb',initial:M.bio||'',onClose:()=>setEditingBio(false),onSave:async(bio)=>{if(onUpdateBio)await onUpdateBio(bio);},showToast}),
     editingWishBudget&&e(WishlistBudgetEditModal,{key:'ewb',wish:editingWishBudget,onClose:()=>setEditingWishBudget(null),onSave:setWishBudget,showToast}),
     analyticsFor&&e(ListingAnalyticsModal,{key:'an',L:analyticsFor,onClose:()=>setAnalyticsFor(null)}),
@@ -4828,18 +4922,18 @@ function App(){
 
   // --- AUTH GATE ---
   if(authState==='loading'||authState==='in'&&!me){
-    return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
-      e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`var(--sh-4), 0 0 0 1px ${C.bd}`,position:'relative'}},[e(LoadingScreen)]),
+    return e('div',{className:'app-stage'},[
+      e('div',{className:'app-frame',style:{background:C.bg}},[e(LoadingScreen)]),
     ]);
   }
   if(authState==='out'){
-    return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
-      e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`var(--sh-4), 0 0 0 1px ${C.bd}`,position:'relative'}},[e(AuthScreen)]),
+    return e('div',{className:'app-stage'},[
+      e('div',{className:'app-frame',style:{background:C.bg}},[e(AuthScreen)]),
     ]);
   }
 
-  return e('div',{style:{display:'flex',justifyContent:'center',padding:'14px 0',background:'#E5E7EB',minHeight:'100%'}},[
-    e('div',{style:{width:380,background:C.bg,borderRadius:34,overflow:'hidden',display:'flex',flexDirection:'column',height:780,boxShadow:`var(--sh-4), 0 0 0 1px ${C.bd}`,position:'relative'}},[
+  return e('div',{className:'app-stage'},[
+    e('div',{className:'app-frame',style:{background:C.bg}},[
       e('div',{key:'sb',style:{height:42,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 18px',borderBottom:`1px solid ${C.dm}`,flexShrink:0}},[
         e('button',{onClick:goHome,'aria-label':'DINK Exchange — go to Discover',title:'Go to Discover',style:{display:'flex',alignItems:'center',gap:6,background:'transparent',border:'none',padding:0,cursor:'pointer'}},[e('span',{key:'d',style:{fontSize:13,fontWeight:800,color:C.lm,letterSpacing:-.3}},'DINK'),e('span',{key:'x',style:{fontSize:9,background:C.lm,color:'#fff',borderRadius:4,padding:'1px 5px',fontWeight:900,letterSpacing:.5}},'EXCHANGE')]),
         e('div',{style:{display:'flex',alignItems:'center',gap:14}},[
