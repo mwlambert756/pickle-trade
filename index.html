@@ -1067,7 +1067,7 @@ function profileToUser(p){
   return {
     id:p.id,name:p.name||'Player',ini:p.initials||'??',
     rating:Number(p.rating)||0,rev:p.review_count||0,trust:p.trust_score||50,
-    vfd:!!p.verified,loc:p.location||'',dist:0,
+    vfd:!!p.verified,loc:p.location||'Not set',dist:0,
     bdg:p.badges||[],since:p.created_at?new Date(p.created_at).getFullYear().toString():'',
     resp:p.response_time||'—',sales:p.sales_count||0,
     ac:p.avatar_color||'#4DA8FF',skill:p.skill||'—',
@@ -1097,7 +1097,7 @@ function mapListingRow(row,meLatLng){
     dist:dist==null?0:Math.round(dist*10)/10,
     grip:row.grip,sz:row.size,gender:row.gender,btype:row.bag_type,
     desc:row.description||'',saves:row.saves_count||0,views:row.views||0,
-    ago:timeAgo(row.created_at),loc:row.location||'',tag:row.tag,
+    ago:timeAgo(row.created_at),loc:row.location||'Not set',tag:row.tag,
     status:row.status,sold_price:row.sold_price,sold_to:row.sold_to,sold_at:row.sold_at,
   };
   if(spec){
@@ -1439,7 +1439,7 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
       L.cat==='gear'&&e('div',{key:'bc','aria-label':L.sub||'Gear',title:L.sub||'Gear',style:{position:'absolute',top:6,left:6,background:C.cd,borderRadius:6,padding:'3px 5px',border:`1px solid ${C.bd}`,display:'flex',alignItems:'center',boxShadow:'var(--sh-1)'}},[e(Ic,{key:'i',n:listIcon(L),s:11,c:C.tx})]),
       L.tag&&e('div',{key:'t',style:{position:'absolute',top:6,right:6}},[e(TP,{t:L.tag})]),
       e('div',{key:'sv',onClick:ev=>{ev.stopPropagation();onSave(L.id);},style:{position:'absolute',bottom:6,right:6,width:24,height:24,background:C.cd,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:`1px solid ${saved?C.lm:C.bd}`,color:saved?C.lm:C.mt,boxShadow:'var(--sh-1)'}},[e(Ic,{n:'heart',s:12,fill:saved})]),
-      e('div',{key:'d',style:{position:'absolute',bottom:6,left:6,fontSize:9,color:'#fff',background:'rgba(31,41,51,0.62)',backdropFilter:'blur(4px)',borderRadius:6,padding:'2px 7px',display:'flex',alignItems:'center',gap:3}},[e(Ic,{key:'i',n:'pin',s:9}),e('span',{key:'t',className:'tnum'},`${L.dist}mi`)]),
+      e('div',{key:'d',style:{position:'absolute',bottom:6,left:6,fontSize:9,color:'#fff',background:'rgba(31,41,51,0.62)',backdropFilter:'blur(4px)',borderRadius:6,padding:'2px 7px',display:'flex',alignItems:'center',gap:3}},[e(Ic,{key:'i',n:'pin',s:9}),e('span',{key:'t',className:'tnum'},`${L.loc}`)]),
     ]),
     e('div',{key:'inf',style:{padding:'8px 10px'}},[
       e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(L)),showMatch&&e(MatchPct,{pct:showMatch})]),
@@ -1743,7 +1743,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
         // Tap arrows (visible when >1 photo)
         photos.length>1&&photoIdx>0&&e('button',{key:'pv',onClick:()=>{setPhotoIdx(i=>i-1);haptic();},style:{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2,backdropFilter:'blur(4px)'}},[e(Ic,{n:'chevronL',s:16,c:'#fff',sw:2.5})]),
         photos.length>1&&photoIdx<photos.length-1&&e('button',{key:'nx',onClick:()=>{setPhotoIdx(i=>i+1);haptic();},style:{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,borderRadius:'50%',background:'rgba(0,0,0,0.45)',border:'none',color:'#fff',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2,backdropFilter:'blur(4px)'}},[e(Ic,{n:'chevron',s:16,c:'#fff',sw:2.5})]),
-        e(IcTxt,{key:'loc',n:'pin',s:10,style:{position:'absolute',bottom:9,left:9,fontSize:10,color:'#fff',background:'rgba(0,0,0,0.55)',backdropFilter:'blur(6px)',borderRadius:8,padding:'3px 9px'}},`${L.dist}mi · ${L.loc}`),
+        e(IcTxt,{key:'loc',n:'pin',s:10,style:{position:'absolute',bottom:9,left:9,fontSize:10,color:'#fff',background:'rgba(0,0,0,0.55)',backdropFilter:'blur(6px)',borderRadius:8,padding:'3px 9px'}},`${L.loc}`),
         L.tag&&e('div',{key:'t',style:{position:'absolute',top:9,right:9}},[e(TP,{t:L.tag})]),
         // Tappable dot indicators
         photos.length>1&&e('div',{key:'dots',style:{position:'absolute',bottom:9,left:'50%',transform:'translateX(-50%)',display:'flex',gap:6,padding:'5px 9px',background:'rgba(0,0,0,0.35)',borderRadius:10}},photos.map((_,i)=>e('button',{key:i,onClick:()=>{setPhotoIdx(i);haptic();},style:{width:i===photoIdx?16:7,height:7,borderRadius:4,background:i===photoIdx?'#fff':'rgba(255,255,255,0.5)',border:'none',padding:0,cursor:'pointer',transition:'width .2s'}}))),
@@ -1771,7 +1771,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
             e('div',{style:{flex:1}},[
               e('div',{style:{display:'flex',alignItems:'center',gap:5,marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},u.name),u.vfd&&e(Ic,{n:'checkDouble',s:12,c:C.lm,sw:2.5})]),
               e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e(St,{r:reviewAvg(u.id)||u.rating}),e('span',{style:{fontSize:10,color:C.mt}},`${reviewAvg(u.id)||u.rating} (${reviewsFor(u.id).length||u.rev})`),e('span',{style:{fontSize:9,color:u.lastActive==='Now'?C.ok:C.mt,display:'inline-flex',alignItems:'center',gap:4}},[u.lastActive==='Now'&&e('span',{key:'d',style:{width:6,height:6,borderRadius:'50%',background:C.ok}}),u.lastActive==='Now'?'Active now':u.lastActive])]),
-              e('div',{style:{fontSize:9,color:C.mt,marginTop:2,display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}},[e(IcTxt,{key:'d',n:'pin',s:9},`${u.dist}mi`),e(IcTxt,{key:'r',n:'bolt',s:9},u.resp),e('span',{key:'s'},`${u.sales} sales`)]),
+              e('div',{style:{fontSize:9,color:C.mt,marginTop:2,display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}},[e(IcTxt,{key:'d',n:'pin',s:9},`${u.loc}`),e(IcTxt,{key:'r',n:'bolt',s:9},u.resp),e('span',{key:'s'},`${u.sales} sales`)]),
             ]),
           ]),
           u.id!==meId&&e('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.dm}`}},[
@@ -1815,7 +1815,7 @@ function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
       const isSold=st.type==='sold';
       return e('div',{key:l.id,style:{background:C.cd,borderRadius:13,border:`1px solid ${st.type==='pricedrop'?C.lm+'40':st.type==='sold'?C.rd+'30':C.bd}`,overflow:'hidden',opacity:isSold?.65:1}},[
         e('div',{style:{padding:'5px 11px',background:st.type==='pricedrop'?C.lm+'15':st.type==='sold'?C.rd+'15':C.tl+'10',display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{width:5,height:5,borderRadius:'50%',background:st.col}}),e('span',{style:{fontSize:10,color:st.col,fontWeight:700}},st.label)])]),
-        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e(Ic,{n:listIcon(l),s:24,c:C.mt+'90',sw:1.5})]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},listTitle(l)),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
+        e('div',{onClick:()=>onView(l),style:{padding:'10px 11px',display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[e('div',{style:{width:52,height:52,background:C.sf,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:32}):e(Ic,{n:listIcon(l),s:24,c:C.mt+'90',sw:1.5})]),e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:12,fontWeight:700,color:isSold?C.mt:C.tx,textDecoration:isSold?'line-through':'none'}},listTitle(l)),e('div',{style:{display:'flex',gap:5,marginTop:3}},[e(CB,{c:l.cond}),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`)])]),e('div',{style:{textAlign:'right'}},[st.type==='pricedrop'&&e('div',{style:{fontSize:10,color:C.mt,textDecoration:'line-through'}},`$${st.prevPrice}`),e('div',{style:{fontSize:15,fontWeight:900,color:isSold?C.mt:C.lm}},`$${l.price}`),e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{fontSize:9,color:C.mt,background:'transparent',border:'none',cursor:'pointer',marginTop:3}},'Unsave')])]),
       ]);
     }))),
   ]);
@@ -1978,8 +1978,8 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'Based on Your Wishlist',ic:'bolt',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e(Ic,{n:'search',s:26,c:C.tl,sw:1.5}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e(Ic,{n:'chevron',s:16,c:C.tl})])]),
     fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'From People You Follow',ic:'users',sub:'Listings from your trusted network',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
     newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'New Near You',ic:'clock',sub:'Freshly listed in your area',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},listTitle(l).split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
-    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'Recently Sold Locally',ic:'check',sub:'Snapshot of recent deals near you'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${s.dist}mi · ${s.ago} ago`)])))]),
+    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},listTitle(l).split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
+    e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'Recently Sold Locally',ic:'check',sub:'Snapshot of recent deals near you'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${s.loc} · ${s.ago} ago`)])))]),
     e('div',{key:'cat',style:{paddingTop:16}},[e(SH,{title:'Shop by Category'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>{const ct=LS.filter(l=>l.cat===c.k.toLowerCase().replace('paddles','paddle').replace('bags','bag')).length;return e('div',{key:c.k,onClick:()=>onCatSelect(c.k),style:{flexShrink:0,width:108,height:128,borderRadius:13,background:`linear-gradient(160deg,${c.col}25,${c.col}08)`,border:`1px solid ${c.col}40`,padding:'12px 11px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between'}},[e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}},[e(Ic,{n:c.ic,s:30,c:c.col,sw:1.5}),e(Ic,{n:'chevron',s:14,c:c.col})]),e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,marginBottom:1}},c.k),e('div',{style:{fontSize:9,color:C.mt}},`${ct} listings`)])]);}))]),
     e('div',{key:'br',style:{paddingTop:16,paddingBottom:18}},[e(SH,{title:'Popular Brands'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>{const ct=LS.filter(l=>l.brand===b.name).length;return e('div',{key:b.name,onClick:()=>onBrandSelect(b.name),style:{flexShrink:0,width:140,height:108,borderRadius:13,background:`linear-gradient(135deg,${b.col},${b.col}AA)`,padding:'11px 12px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between',position:'relative',overflow:'hidden'}},[e('div',{style:{position:'absolute',right:-12,bottom:-22,fontSize:80,opacity:.08,color:'#fff',fontWeight:900}},b.name.charAt(0)),e('div',{style:{position:'relative',zIndex:1}},[e('div',{style:{fontSize:14,fontWeight:900,color:'#fff',lineHeight:1.1,marginBottom:3}},b.name),e('div',{style:{fontSize:9,color:'#ffffffCC'}},b.sub)]),e('div',{style:{display:'flex',justifyContent:'space-between',position:'relative',zIndex:1}},[e('div',{className:'tnum',style:{fontSize:10,color:'#fff',fontWeight:700,background:'rgba(0,0,0,0.25)',borderRadius:6,padding:'2px 7px'}},`${ct} items`),e(Ic,{n:'chevron',s:14,c:'#fff',sw:2.25})])]);}))]),
   ]);
@@ -1989,7 +1989,6 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   const [q,setQ]=useState('');
   const [showPanel,setShowPanel]=useState(false);
   const [sort,setSort]=useState('dist');
-  const [viewMode,setViewMode]=useState('list');
   const [savedSearches,setSavedSearches]=useState(()=>savedSearchesGet());
   // Saved searches are stored on this device and re-run when tapped. They do NOT
   // notify: there's no server-side matcher behind them yet (price drops have one,
@@ -2039,16 +2038,14 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
     ]),
     e('div',{key:'fb',style:{padding:'7px 14px',background:C.bg,borderBottom:`1px solid ${C.dm}`,display:'flex',gap:5,alignItems:'center'}},[
       ...[['dist','Closest'],['new','Newest'],['price','Price ↑'],['pop','Popular']].map(([v,l])=>e('button',{key:v,onClick:()=>setSort(v),style:{padding:'5px 10px',borderRadius:11,border:'none',background:sort===v?C.lm:C.cd,color:sort===v?'#fff':C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},l)),
-      e('button',{key:'vm',onClick:()=>setViewMode(v=>v==='list'?'map':'list'),style:{marginLeft:'auto',padding:'5px 10px',borderRadius:11,border:`1px solid ${viewMode==='map'?C.tl:C.bd}`,background:viewMode==='map'?C.tl+'18':C.cd,color:viewMode==='map'?C.tl:C.mt,fontSize:10,fontWeight:800,cursor:'pointer'}},viewMode==='map'?e(IcTxt,{n:'list',s:11},'List'):e(IcTxt,{n:'map',s:11},'Map')),
-      e('button',{onClick:()=>setShowPanel(true),style:{padding:'5px 11px',borderRadius:11,border:`1.5px solid ${fc>0?C.lm:C.bd}`,background:fc>0?C.lm+'20':C.cd,color:fc>0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:5}},[e(IcTxt,{key:'f',n:'filter',s:11},'Filters'),fc>0&&e('span',{style:{background:C.lm,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900}},fc)]),
+      e('button',{onClick:()=>setShowPanel(true),style:{marginLeft:'auto',padding:'5px 11px',borderRadius:11,border:`1.5px solid ${fc>0?C.lm:C.bd}`,background:fc>0?C.lm+'20':C.cd,color:fc>0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:5}},[e(IcTxt,{key:'f',n:'filter',s:11},'Filters'),fc>0&&e('span',{style:{background:C.lm,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900}},fc)]),
     ]),
     e('div',{key:'rh',style:{padding:'8px 14px',display:'flex',justifyContent:'space-between'}},[e('span',{style:{fontSize:11,color:C.mt}},`${R.length} items found`),fc>0&&e('span',{style:{fontSize:10,color:C.lm,cursor:'pointer'},onClick:()=>setFilters({...initFilters})},'Clear filters')]),
-    viewMode==='map'&&R.length>0?e(LocalMap,{key:'map',listings:R,onView}):
     R.length===0?e('div',{key:'es',style:{padding:'40px 20px',textAlign:'center'}},[e('div',{style:{marginBottom:11,display:'flex',justifyContent:'center'}},[e(Ic,{n:'search',s:40,c:C.mt+'66',sw:1.25})]),e('div',{style:{fontSize:14,fontWeight:800,color:C.tx,marginBottom:5}},'No matches found'),e('div',{style:{fontSize:11,color:C.mt,marginBottom:14}},'Try broadening your search'),e('button',{onClick:()=>setFilters({...initFilters}),style:{padding:'9px 20px',borderRadius:10,background:C.lm,border:'none',cursor:'pointer',fontSize:11,fontWeight:800,color:'#fff'}},'Clear filters')]):e('div',{className:'stagger',style:{padding:'0 14px 16px',display:'flex',flexDirection:'column',gap:9}},R.map(l=>{const u=gU(l.sid);const isSv=saved.includes(l.id);return e('div',{key:l.id,onClick:()=>onView(l),'data-press':'1',style:{background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:10,cursor:'pointer',display:'flex',gap:11,alignItems:'center',boxShadow:'var(--sh-1)'}},[
       e('div',{style:{width:60,height:60,background:C.sf,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative'}},[l.cat==='paddle'?e(PSv,{col:ccol(l.cond)+'70',sz:38}):e(Ic,{n:listIcon(l),s:26,c:C.mt+'90',sw:1.5}),l.tag&&e('div',{style:{position:'absolute',top:-3,left:-3}},[e(TP,{t:l.tag})])]),
       e('div',{style:{flex:1,minWidth:0}},[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}},[e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:13,fontWeight:700,color:C.tx,lineHeight:1.2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},listTitle(l))]),e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,flexShrink:0,marginLeft:8,letterSpacing:'-0.02em'}},`$${l.price}`)]),
-        e('div',{style:{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},'·'),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.dist}mi`),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},u.name.split(' ')[0]),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),l.ago.includes('h')&&e(IcTxt,{n:'clock',s:9,style:{marginLeft:'auto',fontSize:9,color:C.lm,fontWeight:700}},l.ago)]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},[e(CB,{c:l.cond}),e('span',{style:{fontSize:9,color:C.mt}},'·'),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`),e('span',{style:{fontSize:9,color:C.mt}},'·'),e('span',{style:{fontSize:9,color:C.mt}},u.name.split(' ')[0]),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),l.ago.includes('h')&&e(IcTxt,{n:'clock',s:9,style:{marginLeft:'auto',fontSize:9,color:C.lm,fontWeight:700}},l.ago)]),
       ]),
       e('button',{onClick:ev=>{ev.stopPropagation();onSave(l.id);},style:{width:30,height:30,borderRadius:'50%',background:isSv?C.lm+'20':C.sf,border:`1px solid ${isSv?C.lm:C.bd}`,color:isSv?C.lm:C.mt,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}},[e(Ic,{n:'heart',s:14,fill:isSv})]),
     ]);})),
@@ -2320,7 +2317,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,sh
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
     return e('div',{style:{flex:1,minHeight:0,display:'flex',flexDirection:'column',position:'relative'}},[
       paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu,showToast}),
-      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',alignItems:'center',padding:0}},[e(Ic,{n:'back',s:20,sw:2})]),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e(Ic,{n:'checkDouble',s:11,c:C.lm,sw:2.5})]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},'aria-label':'Conversation options',style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,padding:'4px 8px',display:'flex'}},[e(Ic,{n:'more',s:17,sw:2.5})])]),
+      e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',alignItems:'center',padding:0}},[e(Ic,{n:'back',s:20,sw:2})]),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e(Ic,{n:'checkDouble',s:11,c:C.lm,sw:2.5})]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.loc} · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},'aria-label':'Conversation options',style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,padding:'4px 8px',display:'flex'}},[e(Ic,{n:'more',s:17,sw:2.5})])]),
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
         e('button',{onClick:()=>{setShowConvMenu(false);showToast&&showToast('Safety tips opened');setShowSafety(true);},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'shieldCheck',s:13}),'Safe meet-up tips']),
         e('button',{onClick:()=>{setShowConvMenu(false);onReport&&onReport({type:'user',id:th.wu.id,ownerId:th.wu.id,label:th.wu.name});},style:{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',background:'transparent',border:'none',cursor:'pointer',fontSize:12,color:C.tx,borderRadius:8,display:'flex',alignItems:'center',gap:8}},[e(Ic,{key:'i',n:'flag',s:13}),'Report user']),
@@ -2852,7 +2849,7 @@ function ActivityFeed({items,onView,emptyMsg}){
     e(Av,{key:'a',u:a.u,sz:34}),
     e('div',{key:'i',style:{flex:1,minWidth:0}},[
       e('div',{style:{fontSize:11,color:C.tx,lineHeight:1.35}},[e('span',{style:{fontWeight:800}},a.u.name.split(' ')[0]),e('span',{style:{color:C.mt}},' listed '),e('span',{style:{fontWeight:700}},listLabel(a.L))]),
-      e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},e(IcTxt,{n:'pin',s:9},`$${a.L.price} · ${a.L.dist}mi · ${a.ago} ago`)),
+      e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},e(IcTxt,{n:'pin',s:9},`$${a.L.price} · ${a.L.loc} · ${a.ago} ago`)),
     ]),
     e(Ic,{key:'g',n:'chevron',s:14,c:C.mt}),
   ])));}
@@ -3707,48 +3704,13 @@ function PlayersNearby({me,onOpenSeller}){
       e(Av,{u,sz:38}),
       e('div',{style:{flex:1,minWidth:0}},[
         e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),u.lastActive==='Now'&&e('span',{style:{width:6,height:6,borderRadius:'50%',background:C.ok,flexShrink:0}})]),
-        e('div',{style:{fontSize:9,color:C.mt,marginTop:1,display:'flex',gap:7}},[e(IcTxt,{key:'a',n:'pin',s:9},`${u.dist}mi`),e(IcTxt,{key:'b',n:'paddle',s:9},`DUPR ${u.skill}`)]),
+        e('div',{style:{fontSize:9,color:C.mt,marginTop:1,display:'flex',gap:7}},[e(IcTxt,{key:'a',n:'pin',s:9},`${u.loc}`),e(IcTxt,{key:'b',n:'paddle',s:9},`DUPR ${u.skill}`)]),
       ]),
       e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:10,fontWeight:800,color:skillDiff<=0.5?C.ok:C.lm}},skillDiff<=0.5?'Great match':'Good match'),e('div',{style:{fontSize:9,color:C.mt}},`±${skillDiff.toFixed(1)} DUPR`)]),
     ]))),
   ]);
 }
 
-// --- Local map: radar-style plot of nearby listings by distance + bearing ---
-function LocalMap({listings,onView}){
-  const W=320,cx=W/2,cy=W/2;
-  const maxD=Math.max(10,...listings.map(l=>l.dist||0));
-  const R=cx-18;
-  const rings=[0.33,0.66,1];
-  const plot=listings.slice(0,18).map(l=>{
-    const ang=(listingBearing(l)*Math.PI)/180;
-    const rad=((l.dist||0)/maxD)*R;
-    return{l,x:cx+Math.cos(ang)*rad,y:cy+Math.sin(ang)*rad};
-  });
-  const [sel,setSel]=useState(null);
-  return e('div',null,[
-    e('div',{key:'m',style:{position:'relative',width:'100%',maxWidth:W,margin:'0 auto'}},[
-      e('svg',{viewBox:`0 0 ${W} ${W}`,style:{width:'100%',height:'auto',display:'block'}},[
-        ...rings.map((r,i)=>e('circle',{key:'r'+i,cx,cy,r:R*r,fill:'none',stroke:C.bd,strokeWidth:1,strokeDasharray:i<2?'3 4':'none'})),
-        ...rings.map((r,i)=>e('text',{key:'rl'+i,x:cx+2,y:cy-R*r+10,fontSize:8,fill:C.mt},`${Math.round(maxD*r)}mi`)),
-        e('line',{key:'lx',x1:cx-R,y1:cy,x2:cx+R,y2:cy,stroke:C.dm,strokeWidth:1}),
-        e('line',{key:'ly',x1:cx,y1:cy-R,x2:cx,y2:cy+R,stroke:C.dm,strokeWidth:1}),
-        e('circle',{key:'me',cx,cy,r:6,fill:C.lm}),
-        e('text',{key:'met',x:cx,y:cy-9,fontSize:8,fill:C.lm,textAnchor:'middle',fontWeight:'bold'},'You'),
-        ...plot.map(({l,x,y})=>e('g',{key:l.id,style:{cursor:'pointer'},onClick:()=>setSel(l)},[
-          e('circle',{cx:x,cy:y,r:sel&&sel.id===l.id?8:6,fill:C.am,stroke:C.bg,strokeWidth:2}),
-          e('circle',{cx:x,cy:y,r:2,fill:'#fff'}),
-        ])),
-      ]),
-    ]),
-    sel&&e('div',{key:'sel',onClick:()=>onView&&onView(sel),style:{marginTop:10,background:C.cd,borderRadius:12,border:`1px solid ${C.lm}40`,padding:10,display:'flex',gap:10,alignItems:'center',cursor:'pointer'}},[
-      e(PSv,{col:ccol(sel.cond)+'70',sz:30}),
-      e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(sel)),e('div',{style:{fontSize:12,fontWeight:700,color:C.tx}},listTitle(sel)),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${sel.dist}mi · ${sel.loc}`)]),
-      e('div',{style:{fontSize:15,fontWeight:900,color:C.lm}},`$${sel.price}`),
-    ]),
-    !sel&&e('div',{key:'hint',style:{marginTop:9,textAlign:'center',fontSize:10,color:C.mt}},`Tap a marker to preview · ${plot.length} listings plotted`),
-  ]);
-}
 
 // --- Counter-offer modal ---
 function CounterOfferModal({m,onClose,onSubmit}){
