@@ -335,6 +335,29 @@ async function pushUnsubscribe(userId){
 }
 
 // =====================================================================
+// SOCIAL PROOF GATES
+// Rankings, nearby-player lists, follow suggestions and seeded reviews are
+// all built on the same seed arrays (US, FOLLOW_GRAPH, DEMO_REVIEWS). With a
+// real community behind them they're useful; with eight invented people
+// behind them they're the same trap as the self-assignable Verified badge
+// and the synthesized price chart — the app asserting something it can't
+// back. Both were fixed one at a time; this is the switch so the next
+// feature in the family doesn't have to rediscover the problem.
+//
+// Flip `enabled` true once there's genuine volume (real sellers with real
+// completed sales), then turn on individual surfaces as each one has enough
+// data to be honest. Every flag must be true for its surface to render.
+// =====================================================================
+const SOCIAL_PROOF={
+  enabled:false,             // master switch — nothing below renders while false
+  leaderboard:false,         // "Top Sellers" ranking (needs real sales counts)
+  playersNearby:false,       // "Players Near You" (needs real profiles + DUPR)
+  followSuggestions:false,   // "Suggested" tab (needs a real follow graph)
+  seededReviews:false,       // DEMO_REVIEWS on seller profiles — demo only
+};
+const socialProofOn=(k)=>!!(SOCIAL_PROOF.enabled&&SOCIAL_PROOF[k]);
+
+// =====================================================================
 // PHONE VERIFICATION
 // Was a demo that granted the Verified badge for any 4 digits typed in.
 // Now backed by Supabase Auth phone OTP. VERIFY.enabled must stay false
@@ -383,7 +406,11 @@ const DEMO_REVIEWS={
 };
 function reviewsFor(sid){
   const stored=kv.get(REVIEWS_KEY,{});
-  const seeded=DEMO_REVIEWS[sid]||[];
+  // Seeded reviews are quoted testimony attributed to named people. They were
+  // merged in unconditionally, so a seller surfaced from the seed data carried
+  // a rating and review history nobody actually wrote. Gated now — real
+  // reviews (stored, and eventually the `reviews` table) always show.
+  const seeded=socialProofOn('seededReviews')?(DEMO_REVIEWS[sid]||[]):[];
   const extra=stored[sid]||[];
   return [...extra,...seeded];
 }
@@ -1014,9 +1041,22 @@ let SOLD=[
 {id:'s4',brand:'Paddletek',model:'Tempest Wave',price:75,orig:150,dist:2.1,ago:'2d',loc:'Alcoa'},
 ];
 
-const SAVED_STATUS={1:{type:'available',label:'Still available',col:'#14B8A6'},2:{type:'pricedrop',label:'Price dropped · was $155',col:'#6FCF97',prevPrice:155},4:{type:'available',label:'3 people viewing now',col:'#F59E0B'},6:{type:'pricedrop',label:'Price dropped · was $185',col:'#6FCF97',prevPrice:185},8:{type:'sold',label:'Sold — no longer available',col:'#EF4444'}};
-// Demo fallback; real computation comes from computeSavedStatus(listing, meta)
-const getSavedStatus=(id)=>SAVED_STATUS[id]||{type:'available',label:'Still available',col:'#14B8A6'};
+// Demo fallback ONLY — keyed to the seeded integer listing ids. Real listings
+// carry UUID ids and never match here, so they always fall through to
+// computeSavedStatus, which reads actual status and recorded price history.
+//
+// The old id:4 entry read "3 people viewing now". There is no viewer-presence
+// system behind that number; it was a manufactured urgency cue on a screen
+// where someone is deciding whether to spend money. Removed rather than
+// re-labelled — the same reasoning that took out the synthesized price chart.
+const DEMO_SAVED_STATUS={
+  1:{type:'available',label:'Still available',col:'#14B8A6'},
+  2:{type:'pricedrop',label:'Price dropped · was $155',col:'#6FCF97',prevPrice:155},
+  6:{type:'pricedrop',label:'Price dropped · was $185',col:'#6FCF97',prevPrice:185},
+  8:{type:'sold',label:'Sold — no longer available',col:'#EF4444'},
+};
+const AVAILABLE_STATUS={type:'available',label:'Still available',col:'#14B8A6'};
+const getSavedStatus=(id)=>(typeof id==='number'&&DEMO_SAVED_STATUS[id])||AVAILABLE_STATUS;
 function computeSavedStatus(L,meta){
   if(!L)return{type:'unknown',label:'No longer listed',col:'#EF4444'};
   if(L.status==='sold')return{type:'sold',label:'Sold — no longer available',col:'#EF4444'};
@@ -1024,6 +1064,15 @@ function computeSavedStatus(L,meta){
     return{type:'pricedrop',label:`Price dropped · was $${meta.prev_price}`,col:'#6FCF97',prevPrice:Number(meta.prev_price)};
   }
   return{type:'available',label:'Still available',col:'#14B8A6'};
+}
+// Single resolver for every caller. Real listings go through computeSavedStatus
+// even with no saved-meta row, so a genuinely sold listing reads as sold
+// instead of falling back to a cheerful "Still available".
+function savedStatusFor(L,meta){
+  if(!L)return{type:'unknown',label:'No longer listed',col:'#EF4444'};
+  if(meta)return computeSavedStatus(L,meta);
+  if(typeof L.id==='number')return getSavedStatus(L.id);
+  return computeSavedStatus(L,null);
 }
 
 const GEAR=[{id:'g1',brand:'Head',model:'Radical Elite',cond:7,w:['sell'],p:60},{id:'g2',brand:'Onix',model:'Z5 Graphite',cond:6,w:['sell'],p:45},{id:'g3',brand:'Wilson',model:'Clash Pro',cond:8,w:[],p:null}];
@@ -1800,7 +1849,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
 function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
   const [filter,setFilter]=useState('All');
   const listings=LS.filter(l=>saved.includes(l.id));
-  const statusFor=(l)=>savedMeta&&savedMeta[l.id]?computeSavedStatus(l,savedMeta[l.id]):getSavedStatus(l.id);
+  const statusFor=(l)=>savedStatusFor(l,savedMeta&&savedMeta[l.id]);
   const dropCt=listings.filter(l=>statusFor(l).type==='pricedrop').length;
   const soldCt=listings.filter(l=>statusFor(l).type==='sold').length;
   let shown=listings;
@@ -2432,6 +2481,14 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
   const [bulkPriceOpen,setBulkPriceOpen]=useState(false);
   const [localOverrides,setLocalOverrides]=useState(()=>kv.get('myListingOverrides',{}));
   const [commSub,setCommSub]=useState('network');
+  // Only offer sub-tabs whose data is real. If a gated tab was selected before
+  // the flag flipped, fall back to Network rather than rendering an empty shell.
+  const COMM_SUBS=[
+    ['network','Network','users'],
+    socialProofOn('leaderboard')&&['leaderboard','Top Sellers','trophy'],
+    socialProofOn('playersNearby')&&['players','Players Nearby','paddle'],
+  ].filter(Boolean);
+  const activeCommSub=COMM_SUBS.some(([id])=>id===commSub)?commSub:'network';
 
   const patchLocal=(id,patch)=>setLocalOverrides(o=>{const n={...o,[id]:{...(o[id]||{}),...patch}};kv.set('myListingOverrides',n);return n;});
 
@@ -2588,7 +2645,7 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
   const priceDrop=saved.filter(id=>{
     const L=LS.find(l=>l.id===id);
     const meta=savedMeta&&savedMeta[id];
-    return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
+    return savedStatusFor(L,meta).type==='pricedrop';
   }).length;
   const M=me||ME;
   return e(React.Fragment,null,[
@@ -2646,11 +2703,16 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
         e('button',{onClick:()=>setEditingBio(true),'aria-label':'Edit bio',style:{background:'transparent',border:'none',color:C.lm,cursor:'pointer',flexShrink:0,padding:0,marginTop:1,display:'flex'}},[e(Ic,{n:'edit',s:13})]),
       ]),
       // Verification nudge / badge
+      // Copy used to promise "verified sellers get 2× more replies". No such
+      // measurement exists — verification isn't even open yet — and quoting a
+      // multiplier we can't support undercuts the whole point of the badge.
+      // The nudge also now reflects whether verification is actually available
+      // rather than inviting a tap that lands on "isn't open yet".
       !verified&&e('div',{key:'vf',onClick:onOpenVerify,style:{background:C.tl+'10',borderRadius:11,padding:'10px 12px',marginBottom:10,border:`1px solid ${C.tl}35`,cursor:'pointer',display:'flex',alignItems:'center',gap:10}},[
         e(Ic,{n:'shield',s:20,c:C.tl}),
         e('div',{style:{flex:1}},[
-          e('div',{style:{fontSize:12,fontWeight:800,color:C.tl}},'Get verified'),
-          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Confirm your phone — verified sellers get 2× more replies'),
+          e('div',{style:{fontSize:12,fontWeight:800,color:C.tl}},VERIFY.enabled?'Get verified':'Verification is opening soon'),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},VERIFY.enabled?'Confirm your phone to show buyers a real person is behind this account':'We\u2019re still setting up phone verification — tap to learn more'),
         ]),
         e(Ic,{n:'chevron',s:15,c:C.tl}),
       ]),
@@ -2780,10 +2842,15 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
         ]),
       ]),
       tab==='community'&&e('div',{key:'cmw'},[
-        e('div',{key:'sub',style:{display:'flex',gap:6,marginBottom:11,overflowX:'auto'}},[['network','Network','users'],['leaderboard','Top Sellers','trophy'],['players','Players Nearby','paddle']].map(([id,lbl,ico])=>e('button',{key:id,onClick:()=>setCommSub(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${commSub===id?C.lm:C.bd}`,background:commSub===id?C.lm+'15':'transparent',color:commSub===id?C.lm:C.mt,fontSize:11,fontWeight:commSub===id?800:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:ico,s:12}),lbl]))),
-        commSub==='network'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
-        commSub==='leaderboard'&&e(Leaderboard,{key:'lb',onOpenSeller,meId:me?.id}),
-        commSub==='players'&&e(PlayersNearby,{key:'pn',me:M,onOpenSeller}),
+        // Top Sellers and Players Nearby both rank the seeded US array — invented
+        // sales counts, trust scores and DUPR ratings for people who may not
+        // exist. Early on that's a leaderboard of nobody beating your real
+        // users, and a "connect to rally" list that goes unanswered. Components
+        // are kept intact; flip the SOCIAL_PROOF flags to bring them back.
+        COMM_SUBS.length>1&&e('div',{key:'sub',style:{display:'flex',gap:6,marginBottom:11,overflowX:'auto'}},COMM_SUBS.map(([id,lbl,ico])=>e('button',{key:id,onClick:()=>setCommSub(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${commSub===id?C.lm:C.bd}`,background:commSub===id?C.lm+'15':'transparent',color:commSub===id?C.lm:C.mt,fontSize:11,fontWeight:commSub===id?800:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:ico,s:12}),lbl]))),
+        activeCommSub==='network'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
+        activeCommSub==='leaderboard'&&e(Leaderboard,{key:'lb',onOpenSeller,meId:me?.id}),
+        activeCommSub==='players'&&e(PlayersNearby,{key:'pn',me:M,onOpenSeller}),
       ]),
     ]),
     // --- Modals owned by ProfileTab ---
@@ -2823,23 +2890,32 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
     .filter(a=>!lq||(a.u.name||'').toLowerCase().includes(lq)||(a.L.model||'').toLowerCase().includes(lq)||(a.L.brand||'').toLowerCase().includes(lq))
     .sort((a,b)=>AGO_ORDER.indexOf(a.ago)-AGO_ORDER.indexOf(b.ago));
 
-  const TABS=[['followers','Followers',(followers||[]).length],['following','Following',(following||[]).length],['suggested','Suggested',suggested.length],['activity','Activity',activity.length]];
+  // "Suggested" is 2nd-degree from FOLLOW_GRAPH, which is hardcoded seed data
+  // until the real `follows` table overwrites it — so early on it recommends
+  // following people who don't exist.
+  const TABS=[
+    ['followers','Followers',(followers||[]).length],
+    ['following','Following',(following||[]).length],
+    socialProofOn('followSuggestions')&&['suggested','Suggested',suggested.length],
+    ['activity','Activity',activity.length],
+  ].filter(Boolean);
+  const activeSub=TABS.some(([k])=>k===sub)?sub:'followers';
   const SUB={
     fontSize:11,fontWeight:700,cursor:'pointer',padding:'7px 10px',borderRadius:9,flexShrink:0,
   };
   return e('div',null,[
-    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${sub===k?C.pu:C.dm}`,background:sub===k?C.pu+'15':'transparent',color:sub===k?C.pu:C.mt}},`${l} ${n}`))),
+    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${activeSub===k?C.pu:C.dm}`,background:activeSub===k?C.pu+'15':'transparent',color:activeSub===k?C.pu:C.mt}},`${l} ${n}`))),
     e('div',{key:'srch',style:{position:'relative',marginBottom:11}},[
       e('span',{style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',display:'flex',color:C.mt}},[e(Ic,{n:'search',s:13})]),
-      e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:sub==='activity'?'Search activity...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
+      e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:activeSub==='activity'?'Search activity...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
     ]),
-    sub==='followers'&&e(CommunityList,{key:'fl',users:(followers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No followers match your search':'No followers yet — make some sales to grow your network'}),
-    sub==='following'&&e(CommunityList,{key:'fg',users:(followingUsers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No matches':"You're not following anyone yet. Follow sellers from their listings."}),
-    sub==='suggested'&&[
+    activeSub==='followers'&&e(CommunityList,{key:'fl',users:(followers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No followers match your search':'No followers yet — make some sales to grow your network'}),
+    activeSub==='following'&&e(CommunityList,{key:'fg',users:(followingUsers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No matches':"You're not following anyone yet. Follow sellers from their listings."}),
+    activeSub==='suggested'&&[
       e('div',{key:'st',style:{fontSize:9,color:C.mt,marginBottom:8,lineHeight:1.4}},'People followed by sellers you already trust — a good place to grow your network.'),
       e(CommunityList,{key:'sl',users:suggested,following:following||[],onToggle,meId,followerSet,showVia:true,emptyMsg:(following||[]).length===0?'Follow a few sellers first — then we can suggest people you may know.':'No suggestions right now'}),
     ],
-    sub==='activity'&&e(ActivityFeed,{key:'af',items:activity,onView,emptyMsg:(following||[]).length===0?'Follow sellers to see their latest listings here.':'No recent activity from people you follow'}),
+    activeSub==='activity'&&e(ActivityFeed,{key:'af',items:activity,onView,emptyMsg:(following||[]).length===0?'Follow sellers to see their latest listings here.':'No recent activity from people you follow'}),
   ]);
 }
 
@@ -4832,7 +4908,7 @@ function App(){
   const priceDrop=saved.filter(id=>{
     const L=LS.find(l=>l.id===id);
     const meta=savedMeta&&savedMeta[id];
-    return(meta?computeSavedStatus(L,meta):getSavedStatus(id)).type==='pricedrop';
+    return savedStatusFor(L,meta).type==='pricedrop';
   }).length;
   const handleNav=(id)=>{if(id==='sell'){track('nav_sell',{});openPanel('create');setView(null);return;}track('nav_tab',{tab:id});closePanels();setTab(id);setView(null);};
 
@@ -4980,7 +5056,7 @@ function App(){
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'Listing posted')]),
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{openPanel('settings');setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
-          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:getSavedStatus(view.id).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
+          view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:savedStatusFor(view,savedMeta&&savedMeta[view.id]).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
