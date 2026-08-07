@@ -1701,7 +1701,17 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   sp.push(['Condition',clbl(L.cond)],['Posted',L.ago+' ago']);
   const similar=L.cat==='paddle'?findSimilar(L,4):[];
   const currentPhoto=photos[photoIdx];
-  return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
+  // minHeight:0 is load-bearing — do not remove. This is a flex item in a
+  // column container, so it gets min-height:auto, which refuses to shrink below
+  // the intrinsic height of its content. Sibling tabs (FeedTab etc.) escape this
+  // because their root sets overflow-y:auto, and the spec resolves the automatic
+  // minimum to 0 for scroll containers. This root is NOT a scroll container (the
+  // nested 'sc' div below is), so without minHeight:0 it grows to full content
+  // height, the 'sc' child is handed that entire height, never overflows, and
+  // therefore never scrolls — it just gets clipped by the overflow:hidden
+  // wrapper above. It also pushed the absolutely-positioned Buy Now footer below
+  // the visible frame, since that footer is bottom:0 relative to this element.
+  return e('div',{style:{flex:1,minHeight:0,display:'flex',flexDirection:'column',position:'relative'}},[
     showEdit&&e(EditListingModal,{key:'edit',L,onClose:()=>setShowEdit(false),onSave:async(patch)=>{await onEditListing(L,patch);},showToast,showError:showToast}),
     confirmDel&&e(ConfirmModal,{key:'cd',title:'Delete this listing?',body:'This permanently removes the listing for all buyers. This action cannot be undone.',confirmLabel:'Delete',cancelLabel:'Keep',danger:true,onCancel:()=>setConfirmDel(false),onConfirm:async()=>{setConfirmDel(false);await onDeleteListing(L);onBack();}}),
     confirmSold&&e(ConfirmModal,{key:'cs',title:'Mark as sold?',body:'Buyers will no longer see this listing in feeds or search. You can still view it in your Profile.',confirmLabel:'Mark Sold',cancelLabel:'Cancel',onCancel:()=>setConfirmSold(false),onConfirm:async()=>{setConfirmSold(false);await onMarkSold(L);showToast&&showToast('Listing marked as sold');}}),
@@ -1723,7 +1733,7 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
         ],
       ]),
     ]),
-    e('div',{key:'sc',style:{flex:1,overflowY:'auto',paddingBottom:sold?14:90}},[
+    e('div',{key:'sc',style:{flex:1,minHeight:0,overflowY:'auto',WebkitOverflowScrolling:'touch',overscrollBehavior:'contain',paddingBottom:sold?14:90}},[
       e('div',{key:'i',onTouchStart,onTouchEnd,style:{height:200,background:C.sf,display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}},[
         // Image, placeholder during load, or fallback paddle SVG
         currentPhoto?[
@@ -2308,7 +2318,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,sh
     const showSendPay=th.dealStatus==='accepted'&&hasMeetup&&!dealDone;
     const showMeetup=th.dealStatus==='accepted'&&!hasMeetup&&!dealDone;
     const lastAccept=[...th.cv].reverse().find(c=>c.kind==='accept');
-    return e('div',{style:{flex:1,display:'flex',flexDirection:'column',position:'relative'}},[
+    return e('div',{style:{flex:1,minHeight:0,display:'flex',flexDirection:'column',position:'relative'}},[
       paySheet&&e(PaymentSheet,{onClose:()=>setPaySheet(false),onSend:sendPayment,amount:lastAccept?.amount||0,seller:th.wu,showToast}),
       e('div',{key:'h',style:{padding:'10px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:9}},[e('button',{onClick:()=>setActiveIdx(null),'aria-label':'Back',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',alignItems:'center',padding:0}},[e(Ic,{n:'back',s:20,sw:2})]),e(Av,{u:th.wu,sz:34}),e('div',{style:{flex:1}},[e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:13,fontWeight:700,color:C.tx}},th.wu.name),th.wu.vfd&&e(Ic,{n:'checkDouble',s:11,c:C.lm,sw:2.5})]),e('div',{style:{fontSize:9,color:theyTyping?C.lm:C.mt,marginTop:1,fontWeight:theyTyping?700:400}},theyTyping?'typing…':`${th.wu.dist}mi · ${th.wu.lastActive}`)]),e('button',{onClick:()=>{setShowConvMenu(s=>!s);},'aria-label':'Conversation options',style:{background:'transparent',border:'none',cursor:'pointer',color:C.mt,padding:'4px 8px',display:'flex'}},[e(Ic,{n:'more',s:17,sw:2.5})])]),
       showConvMenu&&e('div',{key:'menu',style:{position:'absolute',top:50,right:10,background:C.sf,borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:'0 8px 24px rgba(31,41,51,0.12)',padding:'6px',zIndex:10,minWidth:170}},[
