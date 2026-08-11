@@ -394,6 +394,168 @@ async function verifyCheckCode(digits,code){
   }catch(err){return{ok:false,message:'Verification failed. Try again.'};}
 }
 
+// =====================================================================
+// DUPR RATINGS
+// `profiles.skill` used to be a free-text field that nothing ever wrote to:
+// the seed users carried hardcoded numbers, Settings rendered the value as
+// read-only text, and a real signed-up account showed an em-dash forever.
+// Meanwhile the number was being used for real decisions — Players Near You
+// matches on it, and buyers read it off a seller's profile.
+//
+// Two paths now feed it, and the UI never conflates them:
+//
+//   'linked' — pulled from DUPR's Partner API for an account the player
+//              actually owns. This is the trustworthy one. Shown to 3dp with
+//              a check, the way DUPR itself displays it.
+//   'self'   — typed in by the player. Useful, and better than nothing, but
+//              it's a claim, not a rating, so it's labelled "Self-rated"
+//              everywhere it appears and never gets the check.
+//
+// WHY THERE IS AN EDGE FUNCTION IN THE MIDDLE
+// The Partner API authenticates with a client key + secret exchanged for a
+// bearer token. Both are account-wide credentials: anything holding them can
+// read and write ratings for every player under our partnership. They cannot
+// ship in a browser bundle. So the client never talks to DUPR — it invokes
+// `dupr-link`, which holds the credentials as Supabase secrets, does the call,
+// and writes the result to profiles under the caller's own user id. The client
+// can therefore only ever change its own rating, and only to a value DUPR
+// returned. See supabase/functions/dupr-link/index.ts.
+//
+// TO TURN THIS ON
+//   1. Request Partner API access at dupr.com (clubs → integrations). You get
+//      a client key/secret for UAT first, production after review.
+//   2. `supabase secrets set DUPR_CLIENT_KEY=... DUPR_CLIENT_SECRET=...
+//      DUPR_ENV=uat` then `supabase functions deploy dupr-link`.
+//   3. Apply migration 0009 (the dupr_* columns below).
+//   4. Flip DUPR.enabled to true here.
+// Until step 4, the link flow tells the user plainly that it isn't open yet
+// and offers the self-rated path instead — same pattern as VERIFY above.
+//
+// MIGRATION 0009 — profiles
+//   alter table profiles
+//     add column dupr_id        text,
+//     add column dupr_singles   numeric(4,3),
+//     add column dupr_doubles   numeric(4,3),
+//     add column dupr_source    text check (dupr_source in ('linked','self')),
+//     add column dupr_synced_at timestamptz;
+//   create unique index profiles_dupr_id_key on profiles (dupr_id)
+//     where dupr_id is not null;   -- one DUPR account per DINK account
+//   -- dupr_id / dupr_singles / dupr_doubles / dupr_synced_at are writable only
+//   -- by the service role, so a client can't fake a linked rating:
+//   revoke update (dupr_id, dupr_singles, dupr_doubles, dupr_synced_at)
+//     on profiles from authenticated;
+// =====================================================================
+const DUPR={
+  enabled:false,                 // flip true once the steps above are done
+  fn:'dupr-link',                // Supabase Edge Function name
+  provider:'DUPR Partner API',
+  min:2.0,max:8.0,               // DUPR's published scale
+  staleMs:7*86400e3,             // ratings update weekly; older than this reads as stale
+};
+const duprValid=(v)=>{const n=parseFloat(v);return Number.isFinite(n)&&n>=DUPR.min&&n<=DUPR.max;};
+// Linked ratings show 3dp because that's what DUPR shows and the precision is
+// real. Self-rated ones show 1dp — nobody self-assesses to a thousandth, and
+// printing 3.500 would dress a guess up as a measurement.
+const duprFmt=(v,precise)=>{const n=parseFloat(v);return Number.isFinite(n)?n.toFixed(precise?3:1):null;};
+
+// Single place that decides what a user's rating is and how much to trust it.
+// Everything that renders a rating goes through this so the label, precision
+// and check mark can never drift apart across surfaces.
+function duprFor(u){
+  if(!u)return{value:null,source:'none',label:'Unrated',verified:false};
+  const src=u.duprSource||(u.duprId?'linked':null);
+  const raw=src==='linked'
+    ?(u.duprDoubles!=null?u.duprDoubles:u.duprSingles)
+    :u.skill;
+  const n=parseFloat(raw);
+  if(!Number.isFinite(n))return{value:null,source:'none',label:'Unrated',verified:false};
+  const linked=src==='linked';
+  const syncedAt=u.duprSyncedAt?new Date(u.duprSyncedAt).getTime():0;
+  return{
+    value:duprFmt(n,linked),
+    num:n,
+    source:linked?'linked':'self',
+    verified:linked,
+    label:linked?'DUPR':'Self-rated',
+    singles:u.duprSingles!=null?duprFmt(u.duprSingles,true):null,
+    doubles:u.duprDoubles!=null?duprFmt(u.duprDoubles,true):null,
+    stale:linked&&syncedAt>0&&(Date.now()-syncedAt>DUPR.staleMs),
+    syncedAgo:syncedAt?timeAgo(new Date(syncedAt).toISOString()):null,
+  };
+}
+// Numeric rating for matching/sorting, whatever its provenance. Kept separate
+// from duprFor so a self-rated player still gets matched with people near
+// their level — we just don't claim their number is authoritative.
+const duprNum=(u)=>{const d=duprFor(u);return d.value==null?null:d.num;};
+
+async function duprInvoke(action,body){
+  if(!DUPR.enabled)return{ok:false,message:'DUPR account linking isn\u2019t open yet.',unavailable:true};
+  try{
+    const {data,error}=await sb.functions.invoke(DUPR.fn,{body:{action,...(body||{})}});
+    if(error)return{ok:false,message:'Couldn\u2019t reach DUPR. Try again in a moment.'};
+    if(data&&data.error)return{ok:false,message:data.error};
+    return{ok:true,data:data||{}};
+  }catch(err){
+    console.error('dupr '+action,err);
+    return{ok:false,message:'Couldn\u2019t reach DUPR. Check your connection.'};
+  }
+}
+// Look up a DUPR account by ID or the email on it, so the player can confirm
+// it's really theirs before we attach it. The function returns name + ratings
+// only — never contact details for someone else's account.
+async function duprLookup(query){
+  const q=String(query||'').trim();
+  if(!q)return{ok:false,message:'Enter your DUPR ID or the email on your DUPR account.'};
+  const rl=rateCheck('dupr_lookup');
+  if(rl.ok===false)return{ok:false,message:rl.message};
+  const r=await duprInvoke('lookup',{query:q});
+  if(r.ok)rateRecord('dupr_lookup');
+  return r;
+}
+// The edge function writes the profile row itself under the service role —
+// the client is not permitted to set dupr_id or a linked rating directly.
+async function duprLinkAccount(duprId){
+  const r=await duprInvoke('link',{duprId});
+  if(r.ok)track('dupr_linked',{});
+  return r;
+}
+async function duprRefresh(){return duprInvoke('refresh',{});}
+async function duprUnlinkAccount(){
+  const r=await duprInvoke('unlink',{});
+  if(r.ok)track('dupr_unlinked',{});
+  return r;
+}
+// Self-reported path. Writes only `skill` and `dupr_source`, both of which the
+// client is allowed to set, and clears any linked fields so the two can't be
+// left in a state where a stale linked rating hides behind a new self-rating.
+async function duprSelfSet(userId,value){
+  if(!duprValid(value))return{ok:false,message:`Enter a rating between ${DUPR.min.toFixed(1)} and ${DUPR.max.toFixed(1)}.`};
+  const skill=duprFmt(value,false);
+  if(typeof userId!=='string')return{ok:true,profile:{skill,duprSource:'self',duprId:null,duprSingles:null,duprDoubles:null,duprSyncedAt:null}};
+  const {error}=await sb.from('profiles').update({skill,dupr_source:'self'}).eq('id',userId);
+  if(error){console.error('dupr self set',error);return{ok:false,message:'Couldn\u2019t save your rating. Try again.'};}
+  track('dupr_self_rated',{});
+  return{ok:true,profile:{skill,duprSource:'self',duprId:null,duprSingles:null,duprDoubles:null,duprSyncedAt:null}};
+}
+async function duprClear(userId){
+  if(typeof userId!=='string')return{ok:true,profile:{skill:'\u2014',duprSource:null}};
+  const {error}=await sb.from('profiles').update({skill:null,dupr_source:null}).eq('id',userId);
+  if(error)return{ok:false,message:'Couldn\u2019t remove your rating. Try again.'};
+  return{ok:true,profile:{skill:'\u2014',duprSource:null}};
+}
+// Maps the dupr_* columns off a profiles row onto the shape the UI uses.
+// Shared by profileToUser and the signed-in profile loader so the two can't
+// disagree about what a linked rating looks like.
+function duprFields(p){
+  return{
+    duprId:p.dupr_id||null,
+    duprSingles:p.dupr_singles==null?null:Number(p.dupr_singles),
+    duprDoubles:p.dupr_doubles==null?null:Number(p.dupr_doubles),
+    duprSource:p.dupr_source||null,
+    duprSyncedAt:p.dupr_synced_at||null,
+  };
+}
+
 // --- REVIEWS STORE ---
 // Reviews are keyed by seller id. Seeded with demo reviews; real reviews append here and
 // (for UUID sellers) should also persist to a `reviews` table server-side.
@@ -656,6 +818,7 @@ const RL_RULES={
   report_submit:{max:10,windowMs:86400e3,label:'reports'},
   review_submit:{max:15,windowMs:86400e3,label:'reviews'},
   verify_send:{max:5,windowMs:3600e3,label:'verification codes'},
+  dupr_lookup:{max:20,windowMs:3600e3,label:'DUPR lookups'},
 };
 function rateCheck(action){
   const rule=RL_RULES[action];if(!rule)return{ok:true};
@@ -1120,6 +1283,7 @@ function profileToUser(p){
     bdg:p.badges||[],since:p.created_at?new Date(p.created_at).getFullYear().toString():'',
     resp:p.response_time||'—',sales:p.sales_count||0,
     ac:p.avatar_color||'#4DA8FF',skill:p.skill||'—',
+    ...duprFields(p),
     lastActive:p.last_active?timeAgo(p.last_active)+' ago':'—',
     // cashapp/venmo are not on profiles at all any more — they live in the
     // payment_handles table, readable only by a counterparty in an accepted
@@ -1494,10 +1658,18 @@ function LCard({L,onView,saved,onSave,showMatch,large}){
       e('div',{key:'br',style:{display:'flex',justifyContent:'space-between',marginBottom:1}},[e('span',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(L)),showMatch&&e(MatchPct,{pct:showMatch})]),
       e('div',{key:'mo',style:{fontSize:11,fontWeight:700,color:C.tx,lineHeight:1.2,marginBottom:4}},L.model),
       e('div',{key:'pr',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}},[e('span',{className:'tnum',style:{fontSize:15,fontWeight:800,color:C.lm,letterSpacing:'-0.02em'}},`$${L.price}`),e(CB,{c:L.cond})]),
-      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},[e('div',{style:{display:'flex',alignItems:'center',gap:4,minWidth:0}},[e(Av,{u,sz:18}),e('span',{style:{fontSize:9,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),isFollowing(u.id)&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px',flexShrink:0,display:'inline-flex',alignItems:'center',gap:2}},[e(Ic,{key:'i',n:'check',s:8,sw:3}),'Following'])]),u.sales>0&&e('span',{style:{fontSize:9,color:C.mt}},`${u.sales} sales`)]),
-      (followerCount(u.id)>0||mutualCount(u.id)>0)&&e('div',{key:'soc',style:{display:'flex',alignItems:'center',gap:6,marginTop:4,paddingTop:4,borderTop:`1px solid ${C.dm}`}},[
-        followerCount(u.id)>0&&e(IcTxt,{key:'fc',n:'users',s:9,style:{fontSize:9,color:C.mt,fontWeight:700}},`${followerCount(u.id)} followers`),
-        mutualCount(u.id)>0&&e('span',{key:'mu',style:{fontSize:9,color:C.pu,fontWeight:800}},`· ${mutualCount(u.id)} mutual`),
+      // Seller line. Follower counts, mutual counts and the sales tally used to
+      // stack up here too — four separate social signals under a 148px-wide
+      // card, none of which help you decide whether to tap it. What's left is
+      // who's selling and whether you already follow them, given room to
+      // breathe: identity on the left, relationship on the right.
+      e('div',{key:'us',style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6,marginTop:7}},[
+        e('div',{key:'p',style:{display:'flex',alignItems:'center',gap:5,minWidth:0,flex:1}},[
+          e(Av,{u,sz:18}),
+          e('span',{style:{fontSize:9.5,color:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},u.name.split(' ')[0]),
+          u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),
+        ]),
+        isFollowing(u.id)&&e('span',{key:'f',style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1.5px 6px',flexShrink:0,display:'inline-flex',alignItems:'center',gap:2}},[e(Ic,{key:'i',n:'check',s:8,sw:3}),'Following']),
       ]),
     ]),
   ]);
@@ -1530,7 +1702,7 @@ function OfferOverlay({L,onClose,onSubmit}){
   ]);
 }
 
-function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
+function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,onOpenDupr,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
   const [s,setS]=useState({...settings});
   const [optOut,setOptOut]=useState(()=>analyticsOptedOut());
   const [blockedN,setBlockedN]=useState(()=>blockedCount());
@@ -1577,7 +1749,15 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
       e(Sec,{title:'PROFILE',key:'p'},[
         e(Row,{key:'n',label:'Display name',desc:'Visible to other users',r:e('span',{style:{fontSize:12,color:C.tx}},s.name)}),
         e(Row,{key:'l',label:'Location',desc:'Used for distance',r:e('span',{style:{fontSize:12,color:C.tx}},s.location)}),
-        e(Row,{key:'sk',label:'DUPR Rating',desc:'Skill level',r:e('span',{style:{fontSize:12,color:C.lm,fontWeight:700}},s.skill)}),
+        // Was static text over a field nothing could write to. Now it opens the
+        // link flow and reports which of the two sources the number came from.
+        e(Row,{key:'sk',label:'DUPR Rating',
+          desc:duprFor(me).source==='linked'?'Linked — syncs from your DUPR account'
+            :(duprFor(me).source==='self'?'Self-rated — link DUPR to confirm it'
+            :'Add it so players can find you at your level'),
+          r:e('button',{onClick:onOpenDupr,style:{display:'flex',alignItems:'center',gap:6,background:'transparent',border:'none',padding:0,cursor:'pointer'}},[
+            e(DuprChip,{key:'c',u:me}),e(Ic,{key:'v',n:'chevron',s:14,c:C.mt}),
+          ])}),
       ]),
       e(Sec,{title:'PAYOUTS',key:'pay'},[
         // Placeholder for the central payout account (Stripe Connect). Not wired
@@ -1846,6 +2026,183 @@ function LDetail({L,onBack,onMsg,onBuyNow,onMakeOffer,saved,onSave,onView,sold,f
   ]);
 }
 
+// --- DUPR rating chip ---
+// One component for every surface that shows a rating, so a self-reported
+// number can never accidentally render with the check mark that means "DUPR
+// says so". Unrated is shown too rather than hidden — an absent chip and a
+// chip reading "Unrated" look the same to us but very different to a buyer.
+function DuprChip({u,d,sz,onClick}){
+  const r=d||duprFor(u);
+  const small=sz==='sm';
+  const col=r.source==='linked'?C.pu:(r.source==='self'?C.mt:C.mt);
+  const base={display:'inline-flex',alignItems:'center',gap:4,borderRadius:6,
+    padding:small?'1.5px 6px':'2px 8px',background:col+(r.source==='linked'?'15':'12'),
+    border:`1px solid ${col}${r.source==='linked'?'35':'22'}`,
+    cursor:onClick?'pointer':'default'};
+  if(r.value==null)return e('span',{onClick,style:base},[
+    e(Ic,{key:'i',n:'paddle',s:small?9:10,c:C.mt}),
+    e('span',{key:'t',style:{fontSize:small?8.5:9,color:C.mt,fontWeight:700}},'Unrated'),
+  ]);
+  return e('span',{onClick,title:r.source==='linked'?`Linked DUPR account${r.syncedAgo?' \u00b7 synced '+r.syncedAgo+' ago':''}`:'Rating entered by the player, not confirmed with DUPR',style:base},[
+    e(Ic,{key:'i',n:'paddle',s:small?9:10,c:col}),
+    e('span',{key:'l',style:{fontSize:small?8.5:9,color:col,fontWeight:800,letterSpacing:.2}},r.label),
+    e('span',{key:'v',className:'tnum',style:{fontSize:small?9.5:10,color:col,fontWeight:900}},r.value),
+    r.verified&&e(Ic,{key:'c',n:'checkDouble',s:small?9:10,c:col,sw:2.5}),
+  ]);
+}
+
+// --- Connect / manage a DUPR rating ---
+function DuprOverlay({onClose,me,onChange,showToast}){
+  const cur=duprFor(me);
+  const [step,setStep]=useState(()=>cur.source==='linked'?'linked':(DUPR.enabled?'start':'self'));
+  const [query,setQuery]=useState('');
+  const [self,setSelf]=useState(()=>cur.source==='self'&&cur.value?cur.value:'');
+  const [found,setFound]=useState(null);
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState('');
+
+  const wrap=(children)=>e('div',{role:'dialog','aria-modal':'true','aria-label':'DUPR rating',style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:18,padding:22,width:'100%',maxWidth:340,maxHeight:'88%',overflowY:'auto',animation:'scaleIn var(--dur-2) var(--ease-spring)',border:`1px solid ${C.bd}`}},children),
+  ]);
+  const errBox=err?e('div',{key:'er',role:'alert',style:{fontSize:11,color:C.rd,background:C.rd+'12',border:`1px solid ${C.rd}35`,borderRadius:9,padding:'8px 10px',marginBottom:11,lineHeight:1.5}},err):null;
+  const IS={width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${err?C.rd:C.bd}`,borderRadius:11,color:C.tx,fontSize:14,outline:'none'};
+  const Btn=({label,on,kind,dis})=>e('button',{onClick:dis?null:on,disabled:dis,style:{width:'100%',padding:kind==='ghost'?'9px 0':'13px 0',borderRadius:12,marginBottom:8,
+    background:kind==='ghost'?'transparent':(dis?C.dm:(kind==='danger'?'transparent':C.lm)),
+    border:kind==='danger'?`1px solid ${C.rd}45`:'none',
+    color:kind==='ghost'?C.mt:(kind==='danger'?C.rd:(dis?C.mt:'#fff')),
+    fontSize:kind==='ghost'?11:13,fontWeight:kind==='ghost'?600:800,cursor:dis?'default':'pointer'}},label);
+
+  const doLookup=async()=>{
+    setErr('');setBusy(true);
+    const r=await duprLookup(query);
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'Couldn\u2019t find that DUPR account.');return;}
+    setFound(r.data);setStep('confirm');
+  };
+  const doLink=async()=>{
+    setErr('');setBusy(true);
+    const r=await duprLinkAccount(found&&found.duprId);
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'Couldn\u2019t link that account.');return;}
+    onChange&&onChange(r.data&&r.data.profile);
+    showToast&&showToast('DUPR account linked \u2014 your rating updates automatically');
+    onClose();
+  };
+  const doRefresh=async()=>{
+    setErr('');setBusy(true);
+    const r=await duprRefresh();
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'Couldn\u2019t refresh from DUPR.');return;}
+    onChange&&onChange(r.data&&r.data.profile);
+    showToast&&showToast('Rating refreshed from DUPR');
+  };
+  const doUnlink=async()=>{
+    setErr('');setBusy(true);
+    const r=await duprUnlinkAccount();
+    setBusy(false);
+    if(!r.ok){setErr(r.message||'Couldn\u2019t unlink.');return;}
+    onChange&&onChange(r.data&&r.data.profile);
+    showToast&&showToast('DUPR account unlinked');
+    onClose();
+  };
+  const doSelfSave=async()=>{
+    setErr('');
+    if(!duprValid(self)){setErr(`Enter a rating between ${DUPR.min.toFixed(1)} and ${DUPR.max.toFixed(1)}.`);return;}
+    setBusy(true);
+    const r=await duprSelfSet(me&&me.id,self);
+    setBusy(false);
+    if(!r.ok){setErr(r.message);return;}
+    onChange&&onChange(r.profile);
+    showToast&&showToast('Rating saved \u2014 shown to others as self-rated');
+    onClose();
+  };
+  const doClear=async()=>{
+    setBusy(true);
+    const r=await duprClear(me&&me.id);
+    setBusy(false);
+    if(!r.ok){setErr(r.message);return;}
+    onChange&&onChange(r.profile);
+    onClose();
+  };
+
+  // Already linked — show what we hold and how to change it.
+  if(step==='linked')return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{key:'ic',style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{key:'i',n:'paddle',s:32,c:C.pu,sw:1.5})]),
+      e('div',{key:'h',style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'DUPR account linked'),
+      e('div',{key:'s',style:{fontSize:11,color:C.mt,lineHeight:1.55}},cur.syncedAgo?`Last synced ${cur.syncedAgo} ago. DUPR updates ratings weekly.`:'DUPR updates ratings weekly.'),
+    ]),
+    errBox,
+    e('div',{key:'r',style:{display:'flex',gap:8,marginBottom:12}},[
+      e('div',{key:'d',style:{flex:1,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:12,padding:'11px 12px',textAlign:'center'}},[
+        e('div',{key:'l',style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.5,marginBottom:3}},'DOUBLES'),
+        e('div',{key:'v',className:'tnum',style:{fontSize:19,fontWeight:900,color:cur.doubles?C.pu:C.mt}},cur.doubles||'\u2014'),
+      ]),
+      e('div',{key:'s',style:{flex:1,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:12,padding:'11px 12px',textAlign:'center'}},[
+        e('div',{key:'l',style:{fontSize:9,color:C.mt,fontWeight:800,letterSpacing:.5,marginBottom:3}},'SINGLES'),
+        e('div',{key:'v',className:'tnum',style:{fontSize:19,fontWeight:900,color:cur.singles?C.pu:C.mt}},cur.singles||'\u2014'),
+      ]),
+    ]),
+    cur.stale&&e('div',{key:'st',style:{fontSize:10,color:C.am,background:C.am+'12',border:`1px solid ${C.am}35`,borderRadius:9,padding:'8px 10px',marginBottom:11,lineHeight:1.5}},'This rating hasn\u2019t synced in over a week. Refresh to pull the current one.'),
+    e('div',{key:'id',style:{fontSize:10,color:C.mt,marginBottom:13}},`DUPR ID \u00b7 ${(me&&me.duprId)||'\u2014'}`),
+    e(Btn,{key:'rf',label:busy?'Refreshing\u2026':'Refresh from DUPR',on:doRefresh,dis:busy}),
+    e(Btn,{key:'ul',label:'Unlink this account',on:doUnlink,kind:'danger',dis:busy}),
+    e(Btn,{key:'cl',label:'Close',on:onClose,kind:'ghost'}),
+  ]);
+
+  // Confirm the account we found before attaching it to this profile.
+  if(step==='confirm'&&found)return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:14}},[
+      e('div',{key:'h',style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Is this you?'),
+      e('div',{key:'s',style:{fontSize:11,color:C.mt,lineHeight:1.55}},'Linking pulls this account\u2019s rating onto your DINK profile and keeps it current.'),
+    ]),
+    errBox,
+    e('div',{key:'c',style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:12,padding:'12px 13px',marginBottom:14}},[
+      e('div',{key:'n',style:{fontSize:14,fontWeight:800,color:C.tx,marginBottom:2}},found.name||'DUPR player'),
+      e('div',{key:'m',style:{fontSize:10,color:C.mt,marginBottom:8}},[found.location,found.duprId&&`ID ${found.duprId}`].filter(Boolean).join(' \u00b7 ')),
+      e('div',{key:'r',style:{display:'flex',gap:14}},[
+        e('span',{key:'d',style:{fontSize:11,color:C.mt}},['Doubles ',e('b',{key:'b',className:'tnum',style:{color:C.pu,fontSize:13}},duprFmt(found.doubles,true)||'\u2014')]),
+        e('span',{key:'s',style:{fontSize:11,color:C.mt}},['Singles ',e('b',{key:'b',className:'tnum',style:{color:C.pu,fontSize:13}},duprFmt(found.singles,true)||'\u2014')]),
+      ]),
+    ]),
+    e(Btn,{key:'go',label:busy?'Linking\u2026':'Yes, link this account',on:doLink,dis:busy}),
+    e(Btn,{key:'bk',label:'No, search again',on:()=>{setStep('start');setFound(null);},kind:'ghost'}),
+  ]);
+
+  // Live lookup — only reachable once DUPR.enabled is true.
+  if(step==='start')return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{key:'ic',style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{key:'i',n:'paddle',s:32,c:C.pu,sw:1.5})]),
+      e('div',{key:'h',style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Connect your DUPR'),
+      e('div',{key:'s',style:{fontSize:11,color:C.mt,lineHeight:1.55}},'Your rating shows on your profile and every listing, and stays current on its own. Buyers can see it\u2019s the real one.'),
+    ]),
+    errBox,
+    e('input',{key:'q',value:query,onChange:ev=>{setQuery(ev.target.value);setErr('');},placeholder:'DUPR ID or account email','aria-label':'DUPR ID or email',style:{...IS,marginBottom:10}}),
+    e('div',{key:'pv',style:{fontSize:9.5,color:C.mt,lineHeight:1.5,marginBottom:13}},'We only read your name and ratings. We never post matches or change anything in your DUPR account.'),
+    e(Btn,{key:'go',label:busy?'Searching\u2026':'Find my account',on:doLookup,dis:busy||!query.trim()}),
+    e(Btn,{key:'sf',label:'Enter my rating manually instead',on:()=>{setErr('');setStep('self');},kind:'ghost'}),
+  ]);
+
+  // Self-rated path. Also the whole screen while linking is closed — with the
+  // reason stated, rather than a "Connect" button that goes nowhere.
+  return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:14}},[
+      e('div',{key:'ic',style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{key:'i',n:'paddle',s:32,c:DUPR.enabled?C.lm:C.am,sw:1.5})]),
+      e('div',{key:'h',style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:5}},DUPR.enabled?'Enter your rating':'DUPR linking isn\u2019t open yet'),
+      e('div',{key:'s',style:{fontSize:11.5,color:C.mt,lineHeight:1.6}},DUPR.enabled
+        ?'This shows as self-rated \u2014 it helps players find you at the right level, but it isn\u2019t confirmed with DUPR.'
+        :'We\u2019re still getting DUPR partner access approved. Until then you can enter your rating yourself. It\u2019ll show as self-rated, and you can link the real account in one tap once this opens.'),
+    ]),
+    errBox,
+    e('input',{key:'v',value:self,onChange:ev=>{setSelf(ev.target.value.replace(/[^0-9.]/g,'').slice(0,5));setErr('');},placeholder:'3.5',inputMode:'decimal','aria-label':'Your DUPR rating',style:{...IS,fontSize:22,fontWeight:900,textAlign:'center',letterSpacing:1,marginBottom:8}}),
+    e('div',{key:'sc',style:{fontSize:9.5,color:C.mt,textAlign:'center',marginBottom:13}},`DUPR runs ${DUPR.min.toFixed(1)} to ${DUPR.max.toFixed(1)}. Not sure? 3.0 is solid rec play, 4.0 is competitive.`),
+    e(Btn,{key:'go',label:busy?'Saving\u2026':'Save rating',on:doSelfSave,dis:busy}),
+    DUPR.enabled&&e(Btn,{key:'lk',label:'Link my DUPR account instead',on:()=>{setErr('');setStep('start');},kind:'ghost'}),
+    cur.value!=null&&e(Btn,{key:'rm',label:'Remove my rating',on:doClear,kind:'ghost',dis:busy}),
+    e(Btn,{key:'cx',label:'Cancel',on:onClose,kind:'ghost'}),
+  ]);
+}
+
 function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
   const [filter,setFilter]=useState('All');
   const listings=LS.filter(l=>saved.includes(l.id));
@@ -1983,10 +2340,37 @@ function NotifPanel({onClose,onListing,onMsgs,notifs,onMarkRead,onGear}){
   ]);
 }
 
+// --- Full view of a single Discover rail ---
+// "See all" used to hand you off to the Market tab pre-filtered to Paddles,
+// which is a different set of results than the rail you tapped: "From People
+// You Follow" would open a grid of listings from people you don't follow. The
+// link now expands the rail in place — same items, same order, no truncation —
+// so the label means what it says.
+function FeedSectionView({title,sub,ic,items,empty,onBack,onView,saved,onSave}){
+  const list=items||[];
+  return e('div',{style:{flex:1,overflowY:'auto',background:C.bg}},[
+    e('div',{key:'h',style:{position:'sticky',top:0,zIndex:2,padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[
+      e('button',{key:'b',onClick:onBack,'aria-label':'Back to Discover',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0,flexShrink:0}},[e(Ic,{key:'i',n:'back',s:19,sw:2})]),
+      e('div',{key:'t',style:{flex:1,minWidth:0}},[
+        e('div',{key:'a',style:{fontSize:15,fontWeight:800,color:C.tx,display:'flex',alignItems:'center',gap:6}},[ic&&e(Ic,{key:'i',n:ic,s:14,c:C.lm}),title]),
+        e('div',{key:'b',style:{fontSize:9,color:C.mt,marginTop:1}},`${list.length} listing${list.length===1?'':'s'}${sub?' \u00b7 '+sub:''}`),
+      ]),
+    ]),
+    list.length===0
+      ?e('div',{key:'e',style:{padding:'52px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
+        e(Ic,{key:'i',n:'search',s:38,c:C.mt+'66',sw:1.25}),
+        e('div',{key:'t',style:{fontSize:12,color:C.mt,lineHeight:1.5,maxWidth:250}},empty||'Nothing here right now.'),
+      ])
+      :e('div',{key:'g',className:'stagger',style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,padding:'12px 14px 18px'}},
+        list.map(l=>e('div',{key:l.id},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})]))),
+  ]);
+}
+
 function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch,demoData,onCreate}){
   const [q,setQ]=useState('');
   const [refresh,setRefresh]=useState(false);
   const [sampleDismissed,setSampleDismissed]=useState(false);
+  const [seeAll,setSeeAll]=useState(null);
   let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
   pool.sort((a,b)=>a.dist-b.dist);
   if(q){const lq=q.toLowerCase();pool=pool.filter(l=>[l.brand,l.model,l.sub].filter(Boolean).join(' ').toLowerCase().includes(lq));}
@@ -1995,7 +2379,9 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   const fromFollowing=pool.filter(l=>followSet.has(l.sid));
   const hot=pool.filter(l=>l.tag==='HOT');
   const order=['12h','6h','1d','2d','3d','5d','1w'];
-  const newish=[...pool].sort((a,b)=>order.indexOf(a.ago)-order.indexOf(b.ago)).slice(0,4);
+  // Full list is kept so "See all" has something more to show than the rail.
+  const newishAll=[...pool].sort((a,b)=>order.indexOf(a.ago)-order.indexOf(b.ago));
+  const newish=newishAll.slice(0,4);
   // Recently-viewed: pulled from kv store, filtered against current pool
   const recents=(recentlyViewed||[]).map(id=>LS.find(l=>l.id===id)).filter(Boolean).slice(0,8);
   const handleRefresh=async()=>{
@@ -2003,6 +2389,18 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     try{if(onRefresh)await onRefresh();}catch{}
     setRefresh(false);
   };
+  // Each rail and its complete result set. The rails render a slice; "See all"
+  // renders the whole thing. Both read from `pool`, so the location toggle and
+  // the search box carry through to the expanded view.
+  const SECTIONS={
+    wishlist:{title:'Based on Your Wishlist',ic:'bolt',sub:'Matches from your list',items:wishMatches,empty:'Nothing on your wishlist has listed nearby yet. We\u2019ll notify you the moment one does.'},
+    following:{title:'From People You Follow',ic:'users',sub:'Your trusted network',items:fromFollowing,empty:'Nobody you follow has anything listed right now.'},
+    fresh:{title:'New Near You',ic:'clock',sub:'Freshly listed in your area',items:newishAll,empty:'No new listings in your area yet.'},
+    trending:{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',items:hot,empty:'Nothing is trending nearby this week.'},
+  };
+  if(seeAll&&SECTIONS[seeAll])return e(FeedSectionView,{
+    ...SECTIONS[seeAll],onBack:()=>setSeeAll(null),onView,saved,onSave,
+  });
   const SH=({title,sub,action,onAction,ic})=>e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:9,padding:'0 14px'}},[e('div',null,[e('div',{style:{fontSize:13,fontWeight:800,color:C.tx,letterSpacing:'-0.02em',display:'flex',alignItems:'center',gap:6}},[ic&&e(Ic,{key:'i',n:ic,s:14,c:C.lm}),title]),sub&&e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},sub)]),action&&e('button',{onClick:onAction,style:{fontSize:10,color:C.lm,fontWeight:700,cursor:'pointer',background:'transparent',border:'none',padding:0}},action)]);
   return e('div',{style:{flex:1,overflowY:'auto'}},[
     refresh&&e('div',{key:'rf',style:{padding:'6px 0',textAlign:'center',background:C.sf,fontSize:10,color:C.lm,fontWeight:700}},e(IcTxt,{n:'refresh',s:11},'Refreshing…')),
@@ -2024,10 +2422,10 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
       locMode==='local'&&e('button',{onClick:onLocToggle,style:{padding:'7px 14px',borderRadius:10,background:C.lm+'15',border:`1px solid ${C.lm}40`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:'globe',s:12}),'Search Anywhere']),
     ]),
     recents.length>0&&!q&&e('div',{key:'rv',style:{paddingTop:14}},[e(SH,{title:'Recently Viewed',ic:'clock',sub:'Pick up where you left off'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},recents.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:148}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'Based on Your Wishlist',ic:'bolt',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e(Ic,{n:'search',s:26,c:C.tl,sw:1.5}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e(Ic,{n:'chevron',s:16,c:C.tl})])]),
-    fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'From People You Follow',ic:'users',sub:'Listings from your trusted network',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'New Near You',ic:'clock',sub:'Freshly listed in your area',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
-    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',action:'See all ›',onAction:()=>onCatSelect('Paddles')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},listTitle(l).split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
+    wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'Based on Your Wishlist',ic:'bolt',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all ›',onAction:()=>setSeeAll('wishlist')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e(Ic,{n:'search',s:26,c:C.tl,sw:1.5}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e(Ic,{n:'chevron',s:16,c:C.tl})])]),
+    fromFollowing.length>0&&e('div',{key:'ff',style:{paddingTop:16}},[e(SH,{title:'From People You Follow',ic:'users',sub:'Listings from your trusted network',action:'See all ›',onAction:()=>setSeeAll('following')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},fromFollowing.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
+    newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'New Near You',ic:'clock',sub:'Freshly listed in your area',action:'See all ›',onAction:()=>setSeeAll('fresh')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
+    hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',action:'See all ›',onAction:()=>setSeeAll('trending')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},listTitle(l).split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
     e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'Recently Sold Locally',ic:'check',sub:'Snapshot of recent deals near you'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${s.loc} · ${s.ago} ago`)])))]),
     e('div',{key:'cat',style:{paddingTop:16}},[e(SH,{title:'Shop by Category'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>{const ct=LS.filter(l=>l.cat===c.k.toLowerCase().replace('paddles','paddle').replace('bags','bag')).length;return e('div',{key:c.k,onClick:()=>onCatSelect(c.k),style:{flexShrink:0,width:108,height:128,borderRadius:13,background:`linear-gradient(160deg,${c.col}25,${c.col}08)`,border:`1px solid ${c.col}40`,padding:'12px 11px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between'}},[e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}},[e(Ic,{n:c.ic,s:30,c:c.col,sw:1.5}),e(Ic,{n:'chevron',s:14,c:c.col})]),e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,marginBottom:1}},c.k),e('div',{style:{fontSize:9,color:C.mt}},`${ct} listings`)])]);}))]),
     e('div',{key:'br',style:{paddingTop:16,paddingBottom:18}},[e(SH,{title:'Popular Brands'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>{const ct=LS.filter(l=>l.brand===b.name).length;return e('div',{key:b.name,onClick:()=>onBrandSelect(b.name),style:{flexShrink:0,width:140,height:108,borderRadius:13,background:`linear-gradient(135deg,${b.col},${b.col}AA)`,padding:'11px 12px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between',position:'relative',overflow:'hidden'}},[e('div',{style:{position:'absolute',right:-12,bottom:-22,fontSize:80,opacity:.08,color:'#fff',fontWeight:900}},b.name.charAt(0)),e('div',{style:{position:'relative',zIndex:1}},[e('div',{style:{fontSize:14,fontWeight:900,color:'#fff',lineHeight:1.1,marginBottom:3}},b.name),e('div',{style:{fontSize:9,color:'#ffffffCC'}},b.sub)]),e('div',{style:{display:'flex',justifyContent:'space-between',position:'relative',zIndex:1}},[e('div',{className:'tnum',style:{fontSize:10,color:'#fff',fontWeight:700,background:'rgba(0,0,0,0.25)',borderRadius:6,padding:'2px 7px'}},`${ct} items`),e(Ic,{n:'chevron',s:14,c:'#fff',sw:2.25})])]);}))]),
@@ -2086,7 +2484,7 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
       e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:9}},cats.map(cc=>{const ct=catCount(cc);return e('button',{key:cc,onClick:()=>setCat(cc),style:{padding:'5px 11px',borderRadius:14,border:'none',cursor:'pointer',background:cat===cc?C.lm:C.cd,color:cat===cc?'#fff':C.mt,fontSize:11,fontWeight:700,flexShrink:0,display:'flex',alignItems:'center',gap:5}},[cc,e('span',{style:{fontSize:9,opacity:.7}},ct)]);})),
     ]),
     e('div',{key:'fb',style:{padding:'7px 14px',background:C.bg,borderBottom:`1px solid ${C.dm}`,display:'flex',gap:5,alignItems:'center'}},[
-      ...[['dist','Closest'],['new','Newest'],['price','Price ↑'],['pop','Popular']].map(([v,l])=>e('button',{key:v,onClick:()=>setSort(v),style:{padding:'5px 10px',borderRadius:11,border:'none',background:sort===v?C.lm:C.cd,color:sort===v?'#fff':C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},l)),
+      ...[['dist','Closest'],['new','Newest'],['price','Price'],['pop','Popular']].map(([v,l])=>e('button',{key:v,onClick:()=>setSort(v),style:{padding:'5px 10px',borderRadius:11,border:'none',background:sort===v?C.lm:C.cd,color:sort===v?'#fff':C.mt,fontSize:10,fontWeight:700,cursor:'pointer'}},l)),
       e('button',{onClick:()=>setShowPanel(true),style:{marginLeft:'auto',padding:'5px 11px',borderRadius:11,border:`1.5px solid ${fc>0?C.lm:C.bd}`,background:fc>0?C.lm+'20':C.cd,color:fc>0?C.lm:C.tx,fontSize:10,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',gap:5}},[e(IcTxt,{key:'f',n:'filter',s:11},'Filters'),fc>0&&e('span',{style:{background:C.lm,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900}},fc)]),
     ]),
     e('div',{key:'rh',style:{padding:'8px 14px',display:'flex',justifyContent:'space-between'}},[e('span',{style:{fontSize:11,color:C.mt}},`${R.length} items found`),fc>0&&e('span',{style:{fontSize:10,color:C.lm,cursor:'pointer'},onClick:()=>setFilters({...initFilters})},'Clear filters')]),
@@ -2455,7 +2853,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
+function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
@@ -2690,10 +3088,7 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,me,savedMeta,follow
       e('div',{key:'meta',style:{marginBottom:10}},[
         e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:M.bdg.length>0?6:0}},[
           e(IcTxt,{n:'pin',s:10,style:{fontSize:10,color:C.mt}},`${M.loc} · Since ${M.since}`),
-          e('div',{style:{display:'inline-flex',alignItems:'center',gap:4,background:C.pu+'15',borderRadius:6,padding:'2px 8px'}},[
-            e(IcTxt,{n:'paddle',s:10,style:{fontSize:9,color:C.pu,fontWeight:800}},'DUPR'),
-            e('span',{style:{fontSize:10,color:C.pu,fontWeight:900}},M.skill),
-          ]),
+          e(DuprChip,{u:M,onClick:onOpenDupr}),
         ]),
         M.bdg.length>0&&e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},M.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'15',borderRadius:8,padding:'2px 7px',border:`1px solid ${C.tl}25`}},b))),
       ]),
@@ -3726,7 +4121,7 @@ function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showTo
         e('div',{style:{flex:1}},[
           e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:18,fontWeight:900,color:C.tx}},u.name),u.vfd&&e(Ic,{n:'checkDouble',s:13,c:C.lm,sw:2.5})]),
           e('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:3}},[e(Stars,{r:avg,sz:12}),e('span',{style:{fontSize:10,color:C.mt}},`${avg} · ${u.sales||0} sales`)]),
-          e('div',{style:{fontSize:10,color:C.mt,marginTop:3,display:'flex',gap:8,flexWrap:'wrap'}},[e(IcTxt,{key:'a',n:'pin',s:10},u.loc||'—'),e(IcTxt,{key:'b',n:'bolt',s:10},u.resp||'—'),e(IcTxt,{key:'c',n:'paddle',s:10},`DUPR ${u.skill||'—'}`)]),
+          e('div',{style:{fontSize:10,color:C.mt,marginTop:3,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},[e(IcTxt,{key:'a',n:'pin',s:10},u.loc||'—'),e(IcTxt,{key:'b',n:'bolt',s:10},u.resp||'—'),e(DuprChip,{key:'c',u,sz:'sm'})]),
         ]),
       ]),
       u.id!==meId&&e('div',{key:'fb',style:{marginBottom:14}},[e(FollowBtn,{userId:u.id,following:following||[],onToggle:onToggleFollow||(()=>{}),sz:'lg'})]),
@@ -3768,8 +4163,11 @@ function Leaderboard({onOpenSeller,meId}){
 
 // --- "Players Near You" — similar DUPR skill, sorted by distance ---
 function PlayersNearby({me,onOpenSeller}){
-  const mySkill=parseFloat((me&&me.skill)||ME.skill)||3.5;
-  const players=US.map(u=>({u,skillDiff:Math.abs((parseFloat(u.skill)||3.5)-mySkill)}))
+  // Match on the resolved rating so a linked DUPR account is used when there
+  // is one. Self-rated players still get matched — the number is usable for
+  // finding a level even though it isn't authoritative.
+  const mySkill=duprNum(me)||duprNum(ME)||3.5;
+  const players=US.map(u=>({u,skillDiff:Math.abs((duprNum(u)||3.5)-mySkill)}))
     .filter(p=>p.u.dist!=null&&p.u.dist<=30)
     .sort((a,b)=>(a.skillDiff-b.skillDiff)||(a.u.dist-b.u.dist))
     .slice(0,8);
@@ -3780,7 +4178,7 @@ function PlayersNearby({me,onOpenSeller}){
       e(Av,{u,sz:38}),
       e('div',{style:{flex:1,minWidth:0}},[
         e('div',{style:{display:'flex',alignItems:'center',gap:5}},[e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),u.lastActive==='Now'&&e('span',{style:{width:6,height:6,borderRadius:'50%',background:C.ok,flexShrink:0}})]),
-        e('div',{style:{fontSize:9,color:C.mt,marginTop:1,display:'flex',gap:7}},[e(IcTxt,{key:'a',n:'pin',s:9},`${u.loc}`),e(IcTxt,{key:'b',n:'paddle',s:9},`DUPR ${u.skill}`)]),
+        e('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:2}},[e(IcTxt,{key:'a',n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${u.loc}`),e(DuprChip,{key:'b',u,sz:'sm'})]),
       ]),
       e('div',{style:{textAlign:'right'}},[e('div',{style:{fontSize:10,fontWeight:800,color:skillDiff<=0.5?C.ok:C.lm}},skillDiff<=0.5?'Great match':'Good match'),e('div',{style:{fontSize:9,color:C.mt}},`±${skillDiff.toFixed(1)} DUPR`)]),
     ]))),
@@ -4171,6 +4569,7 @@ function App(){
   const [condGuideOpen,setCondGuideOpen]=useState(false);
   const [sellerView,setSellerView]=useState(null);   // public seller profile overlay
   const [verifyOpen,setVerifyOpen]=useState(false);  // identity/phone verification
+  const [duprOpen,setDuprOpen]=useState(false);      // DUPR link / self-rate flow
   const [verified,setVerified]=useState(()=>kv.get('verified',false));
   const [pushOn,setPushOn]=useState(()=>pushPermGet()==='granted');
   const [onboardStep,setOnboardStep]=useState(0);
@@ -4243,6 +4642,7 @@ function App(){
           since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
           resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
           ac:prof.avatar_color||'#4DA8FF',bdg:prof.badges||[],
+          ...duprFields(prof),
           cashapp:prof.cashapp||'',venmo:prof.venmo||'',
           rating:prof.rating||0,rev:prof.review_count||0,trust:prof.trust_score||50,
           lat:prof.lat,lng:prof.lng,
@@ -5022,6 +5422,19 @@ function App(){
         condGuideOpen&&e(ConditionGuideModal,{key:'cguide',onClose:()=>setCondGuideOpen(false)}),
         buyConfirm&&e(BuyNowConfirm,{key:'bc',L:buyConfirm,onCancel:()=>setBuyConfirm(null),onConfirm:()=>{const L=buyConfirm;setBuyConfirm(null);initBuyNow(L);showToast('Offer sent — seller will be notified');}}),
         reviewFor&&e(ReviewModal,{key:'rv',L:reviewFor.L,seller:reviewFor.seller,onClose:()=>setReviewFor(null),onSubmit:(r,t)=>{try{reviewAdd(reviewFor.seller?.id,r,t,me?.name||'You');}catch(err){}setReviewFor(null);showToast('Thanks for your review!');}}),
+        // Both the link flow and the self-rated path land here. The edge
+        // function returns the updated profile row, so we patch `me` from the
+        // server's answer rather than from what the user typed.
+        duprOpen&&e(DuprOverlay,{key:'dp',me,showToast,onClose:()=>setDuprOpen(false),
+          onChange:(patch)=>{
+            if(!patch)return;
+            // duprSelfSet hands back the camelCase shape the UI uses; the edge
+            // function hands back the raw profiles row. Accept either.
+            const isRow=('dupr_source' in patch)||('dupr_id' in patch);
+            const norm=isRow?{skill:patch.skill||'\u2014',...duprFields(patch)}:patch;
+            setMe(m=>m?{...m,...norm}:m);
+            setSettings(st=>({...st,skill:norm.skill!=null?norm.skill:st.skill}));
+          }}),
         verifyOpen&&e(VerificationModal,{key:'vf',showToast,onClose:()=>setVerifyOpen(false),onVerified:async()=>{
           // profiles.verified is no longer writable by clients — the column is
           // revoked at the database and granted only through grant_verification(),
@@ -5039,7 +5452,7 @@ function App(){
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
-        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),pushOn,showToast,
+        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),onOpenDupr:()=>setDuprOpen(true),pushOn,showToast,
           onOpenLegal:(k)=>{track('legal_viewed',{kind:k});setLegalKind(k);},
           onOpenProhibited:()=>setProhibitedOpen(true),
           onOpenBlocked:()=>setBlockedOpen(true),
@@ -5060,7 +5473,7 @@ function App(){
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),onOpenDupr:()=>setDuprOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
       !overlayOpen&&!view&&!fullScreenModal&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
