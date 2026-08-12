@@ -1491,15 +1491,22 @@ const ICON_PATHS={
   shirt:'M8.5 2L5 4.8 2.5 9.2l3 2.3 1.5-1.6V21a1 1 0 001 1h8a1 1 0 001-1V9.9l1.5 1.6 3-2.3L18 4.8 14.5 2a3.5 3.5 0 01-6 0zM9 5.2a3 3 0 006 0',
   bag:'M8 7V5.5a4 4 0 018 0V7M4.5 7h15l1 13.5a1.5 1.5 0 01-1.5 1.5H5a1.5 1.5 0 01-1.5-1.5zM8 10.5v2.5a4 4 0 008 0v-2.5M4.5 7l-1 4h17l-1-4',
   paddle:'M12 2a7 7 0 017 7c0 3.9-3.1 7-7 7s-7-3.1-7-7a7 7 0 017-7zM12 16v6M10 22h4',
-  // Paddle, held: same face+handle construction as 'paddle' above, rotated
-  // ~30° with a small ball at the free corner. The upright version reads
-  // fine as an abstract "pickleball" glyph next to a rating number, which is
-  // all it needs to do at 9px in the skill chip — but blown up to 30px alone
-  // in a category tile with no supporting text, it read as a lightbulb. The
-  // tilt plus the ball is the standard disambiguation move (it's how most
-  // icon sets draw a table-tennis/pickleball paddle), so this variant is
-  // used only for the Shop-by-category chip; 'paddle' elsewhere is untouched.
-  paddleBall:'M4.9 4.71 L10.1 1.71 A5 5 0 0 1 16.93 3.54 L17.43 4.4 A5 5 0 0 1 15.6 11.23 L10.4 14.23 A5 5 0 0 1 3.57 12.4 L3.07 11.54 A5 5 0 0 1 4.9 4.71 Z M11.52 14.17 L14.98 12.17 L17.98 17.36 A2 2 0 0 1 14.52 19.36 Z M18.6 3.6a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0',
+  // Paddle + ball. The face is a rounded rectangle rather than the oval used
+  // by 'paddle' above — that oval is a ping-pong bat shape, and blown up in a
+  // category chip with no supporting text it read as a hand mirror. A real
+  // pickleball face is close to square with rounded corners, and the ball
+  // beside the handle is what makes the glyph unmistakably a sport rather
+  // than an object.
+  //
+  // Drawn upright rather than tilted on purpose. A tilted version has more
+  // life to it, but the handle detail is the first thing to close up at small
+  // sizes, and this renders at 15px in the chip. Upright survives that; the
+  // tilt didn't.
+  //
+  // Scoped to the Shop-by-category chip only. 'paddle' above is untouched
+  // because it still does its job at 9-10px next to a DUPR rating number,
+  // where this two-element version would just turn to mush.
+  paddleBall:'M7.9 2 L12.3 2 A3.3 3.3 0 0 1 15.6 5.3 L15.6 10.3 A3.3 3.3 0 0 1 12.3 13.6 L7.9 13.6 A3.3 3.3 0 0 1 4.6 10.3 L4.6 5.3 A3.3 3.3 0 0 1 7.9 2 Z M7.9 13.6v4.5a2.05 2.05 0 004.1 0v-4.5 M16.6 16.4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0',
 };
 function Ic({n,s=16,c='currentColor',fill=false,sw=1.75,style}){
   const d=ICON_PATHS[n];
