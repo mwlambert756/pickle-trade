@@ -1490,24 +1490,25 @@ const ICON_PATHS={
   shoe:'M2 18.5h18.5a1.5 1.5 0 001.5-1.5 4 4 0 00-4-4h-1.3a3 3 0 01-2.4-1.2L11.6 8a3 3 0 00-2.4-1.2H6.5A2.5 2.5 0 004 9.3L2 12zM2 18.5V12M9 10l1.2 2.2M12 10.3l1.3 2.4M15 10.8l1.2 2.1M4 21.5h18',
   shirt:'M8.5 2L5 4.8 2.5 9.2l3 2.3 1.5-1.6V21a1 1 0 001 1h8a1 1 0 001-1V9.9l1.5 1.6 3-2.3L18 4.8 14.5 2a3.5 3.5 0 01-6 0zM9 5.2a3 3 0 006 0',
   bag:'M8 7V5.5a4 4 0 018 0V7M4.5 7h15l1 13.5a1.5 1.5 0 01-1.5 1.5H5a1.5 1.5 0 01-1.5-1.5zM8 10.5v2.5a4 4 0 008 0v-2.5M4.5 7l-1 4h17l-1-4',
-  paddle:'M12 2a7 7 0 017 7c0 3.9-3.1 7-7 7s-7-3.1-7-7a7 7 0 017-7zM12 16v6M10 22h4',
-  // Paddle + ball. The face is a rounded rectangle rather than the oval used
-  // by 'paddle' above — that oval is a ping-pong bat shape, and blown up in a
-  // category chip with no supporting text it read as a hand mirror. A real
-  // pickleball face is close to square with rounded corners, and the ball
-  // beside the handle is what makes the glyph unmistakably a sport rather
-  // than an object.
+  // Paddle + ball. The face is a rounded rectangle rather than an oval — an
+  // oval is a ping-pong bat shape, and blown up with no supporting text it
+  // read as a hand mirror. A real pickleball face is close to square with
+  // rounded corners, and the ball beside the handle is what makes the glyph
+  // unmistakably a sport rather than an object.
   //
   // Drawn upright rather than tilted on purpose. A tilted version has more
   // life to it, but the handle detail is the first thing to close up at small
-  // sizes, and this renders at 15px in the chip. Upright survives that; the
-  // tilt didn't.
+  // sizes, and this renders as small as 9px next to a DUPR rating. Upright
+  // survives that; the tilt didn't.
   //
-  // Scoped to the Shop-by-category chip only. 'paddle' above is untouched
-  // because it still does its job at 9-10px next to a DUPR rating number,
-  // where this two-element version would just turn to mush.
-  paddleBall:'M7.9 2 L12.3 2 A3.3 3.3 0 0 1 15.6 5.3 L15.6 10.3 A3.3 3.3 0 0 1 12.3 13.6 L7.9 13.6 A3.3 3.3 0 0 1 4.6 10.3 L4.6 5.3 A3.3 3.3 0 0 1 7.9 2 Z M7.9 13.6v4.5a2.05 2.05 0 004.1 0v-4.5 M16.6 16.4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0',
+  // This was previously scoped to the Shop-by-category chip while a separate
+  // oval 'paddle' glyph covered everywhere else, which meant the same object
+  // had two different silhouettes depending on the screen. One shape now, and
+  // 'paddleBall' stays as an alias so the SHOP_CATS entry and any other call
+  // site using that name keeps resolving.
+  paddle:'M7.9 2 L12.3 2 A3.3 3.3 0 0 1 15.6 5.3 L15.6 10.3 A3.3 3.3 0 0 1 12.3 13.6 L7.9 13.6 A3.3 3.3 0 0 1 4.6 10.3 L4.6 5.3 A3.3 3.3 0 0 1 7.9 2 Z M7.9 13.6v4.5a2.05 2.05 0 004.1 0v-4.5 M16.6 16.4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0',
 };
+ICON_PATHS.paddleBall=ICON_PATHS.paddle; // alias — see the note on 'paddle'
 function Ic({n,s=16,c='currentColor',fill=false,sw=1.75,style}){
   const d=ICON_PATHS[n];
   if(!d)return null;
@@ -1690,7 +1691,17 @@ function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showV
     ]);
   }));}
 function CB({c}){const col=ccol(c);return e('span',{style:{display:'inline-flex',alignItems:'center',gap:3,fontSize:10,color:col,fontWeight:600}},[e('span',{key:'d',style:{width:5,height:5,borderRadius:'50%',background:col}}),clbl(c)]);}
-function PSv({col=C.bd,sz=52}){return e('svg',{width:sz,height:sz*1.4,viewBox:'0 0 60 84',style:{flexShrink:0}},[e('ellipse',{key:'h',cx:30,cy:28,rx:22,ry:25,fill:col}),e('rect',{key:'hn',x:23,y:50,width:14,height:28,rx:5,fill:col})]);}
+// Filled paddle silhouette — the photo placeholder on paddle listings. Redrawn
+// from an ellipse-plus-stick to the same rounded-square face, handle and ball
+// composition as the 'paddle' icon, so a listing card with no photo and the
+// category chip above it are recognizably the same object. Solid rather than
+// stroked because this renders as a low-contrast tint behind the card, where
+// hairline strokes disappear.
+function PSv({col=C.bd,sz=52}){return e('svg',{width:sz,height:sz*1.4,viewBox:'0 0 60 84',style:{flexShrink:0}},[
+  e('rect',{key:'f',x:7,y:3,width:46,height:50,rx:14,fill:col}),
+  e('rect',{key:'hn',x:23,y:50,width:14,height:28,rx:5,fill:col}),
+  e('circle',{key:'b',cx:47,cy:70,r:7,fill:col}),
+]);}
 function TP({t}){if(!t)return null;const cf={HOT:{bg:C.cta,tx:'#fff'},NEW:{bg:C.ok,tx:'#fff'}};const{bg,tx}=cf[t]||{bg:C.bd,tx:C.tx};return e('span',{style:{fontSize:9,fontWeight:800,background:bg,color:tx,borderRadius:6,padding:'2px 8px'}},t);}
 function MatchPct({pct}){const col=pct>=80?C.ok:pct>=65?C.lm:C.am;return e('span',{style:{fontSize:9,fontWeight:800,color:col,background:col+'20',borderRadius:6,padding:'2px 6px'}},`${pct}%`);}
 
@@ -1752,6 +1763,20 @@ function OfferOverlay({L,onClose,onSubmit}){
   ]);
 }
 
+// Time-box a supabase call and normalize every outcome into {error}. Two
+// separate failure modes were leaving the Settings save button stuck:
+// supabase-js will sit on a stalled request forever (no default timeout), and
+// a rejected promise skips straight past the line that clears the spinner.
+// Both come back through here as an ordinary error object instead.
+const SAVE_TIMEOUT_MS=12000;
+function withTimeout(p,ms=SAVE_TIMEOUT_MS){
+  let t;
+  return Promise.race([
+    Promise.resolve(p).then(r=>r,err=>({error:err||{message:'request failed'}})),
+    new Promise(res=>{t=setTimeout(()=>res({error:{message:'timed out',__timeout:true}}),ms);}),
+  ]).then(r=>{clearTimeout(t);return r;});
+}
+
 function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,onOpenDupr,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
   const [s,setS]=useState({...settings});
   const [optOut,setOptOut]=useState(()=>analyticsOptedOut());
@@ -1762,28 +1787,48 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
   const up=(k,v)=>setS(x=>({...x,[k]:v}));
   const [saving,setSaving]=useState(false);
   const save=async()=>{
+    if(saving)return;                       // double-tap would fire a second write
     const cleaned={...s,cashapp:safeCashapp(s.cashapp),venmo:safeVenmo(s.venmo)};
     if(!me?.id){setSettings(cleaned);onClose();return;}
     setSaving(true);
-    // Payment handles live in their own gated table now (migration 0004), not
-    // on profiles. upsert rather than update on both writes: update against a
-    // row that doesn't exist yet affects zero rows and reports no error, which
-    // is exactly how a setting appears to save and then isn't there tomorrow.
-    const {error:phErr}=await sb.from('payment_handles').upsert({
-      user_id:me.id,cashapp:cleaned.cashapp||null,venmo:cleaned.venmo||null,
-    },{onConflict:'user_id'});
-    const {error:usErr}=await sb.from('user_settings').upsert({
-      user_id:me.id,
-      notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
-      notif_messages:s.notifMessages,
-      precise_location:s.preciseLoc,
-    },{onConflict:'user_id'});
-    setSaving(false);
+    let phErr=null,usErr=null;
+    try{
+      // Payment handles live in their own gated table now (migration 0004), not
+      // on profiles. upsert rather than update on both writes: update against a
+      // row that doesn't exist yet affects zero rows and reports no error, which
+      // is exactly how a setting appears to save and then isn't there tomorrow.
+      //
+      // Fired together rather than one after the other. They're independent
+      // tables, so serializing them bought nothing and doubled the window a
+      // flaky connection had to strand the user on "Saving…".
+      const [ph,us]=await Promise.all([
+        withTimeout(sb.from('payment_handles').upsert({
+          user_id:me.id,cashapp:cleaned.cashapp||null,venmo:cleaned.venmo||null,
+        },{onConflict:'user_id'})),
+        withTimeout(sb.from('user_settings').upsert({
+          user_id:me.id,
+          notif_wishlist:s.notifWishlist,notif_price_drops:s.notifPriceDrops,
+          notif_messages:s.notifMessages,
+          precise_location:s.preciseLoc,
+        },{onConflict:'user_id'})),
+      ]);
+      phErr=(ph&&ph.error)||null;usErr=(us&&us.error)||null;
+    }catch(err){
+      // Nothing above should throw now that withTimeout absorbs rejections, but
+      // if it ever does, the finally below is what guarantees the button comes
+      // back rather than sitting disabled until the screen is closed.
+      usErr=err||{message:'unknown error'};
+    }finally{
+      setSaving(false);
+    }
     if(phErr||usErr){
       // Stay open so nothing the user typed is lost.
-      showToast&&showToast(phErr
-        ?'Couldn\u2019t save your payment handles. Check the format and try again.'
-        :'Couldn\u2019t save your settings. Check your connection and try again.');
+      const timedOut=(phErr&&phErr.__timeout)||(usErr&&usErr.__timeout);
+      showToast&&showToast(timedOut
+        ?'That took too long to save. Check your connection and try again.'
+        :(phErr
+          ?'Couldn\u2019t save your payment handles. Check the format and try again.'
+          :'Couldn\u2019t save your settings. Check your connection and try again.'));
       return;
     }
     setSettings(cleaned);
@@ -1845,7 +1890,17 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
         PUSH.enabled&&pushOn===false&&pushPermGet()==='denied'&&e('div',{key:'pdn',style:{fontSize:10,color:C.am,lineHeight:1.5,padding:'8px 10px',background:C.am+'12',border:`1px solid ${C.am}35`,borderRadius:9,marginTop:8}},'Notifications are blocked in your browser settings. You\'ll need to re-allow them there before we can turn these on.'),
       ]),
       e(Sec,{title:'APPEARANCE',key:'ap'},[
-        e(Row,{key:'dk',label:'Dark mode',desc:'Easier on the eyes at night',r:e(Tog,{on:s.darkMode,onChange:()=>up('darkMode',!s.darkMode)})}),
+        // Theme is a device-local preference (kv 'themeMode') — there is no
+        // column for it and nothing to sync. Routing it through the Save button
+        // meant a purely local toggle inherited every failure mode of a remote
+        // write. It now applies on tap and persists on its own; Save is left to
+        // the fields that actually need the server.
+        e(Row,{key:'dk',label:'Dark mode',desc:'Applies right away',r:e(Tog,{on:s.darkMode,onChange:()=>{
+          const v=!s.darkMode;
+          up('darkMode',v);
+          setSettings(x=>({...x,darkMode:v}));
+          haptic('light');
+        }})}),
       ]),
       e(Sec,{title:'VERIFICATION',key:'vfy'},[
         e(Row,{key:'ph',
@@ -4699,6 +4754,13 @@ function App(){
   const [themeMode,setThemeMode]=useState(()=>kv.get('themeMode','light'));
   const [,setThemeTick]=useState(0);
   useEffect(()=>{applyTheme(themeMode);kv.set('themeMode',themeMode);setThemeTick(t=>t+1);},[themeMode]);
+  // loadProfile is memoized with an empty dep list, so the themeMode it closes
+  // over is frozen at first render. It rebuilds the whole settings object on
+  // every profile load (sign-in, token refresh, tab regaining focus), and that
+  // stale value would silently flip the theme back to whatever it was when the
+  // app booted. Read the live value through a ref instead.
+  const themeRef=useRef(themeMode);
+  useEffect(()=>{themeRef.current=themeMode;},[themeMode]);
   // Register the service worker once so push/offline can be layered on in production
   useEffect(()=>{registerSW();},[]);
   // Global crash capture + batched analytics flushing. Without this we'd have no
@@ -4768,7 +4830,7 @@ function App(){
             notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
             notifMessages:us.notif_messages,
             preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
-            darkMode:themeMode==='dark',
+            darkMode:themeRef.current==='dark',
           });
         }
       } else {
