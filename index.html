@@ -144,7 +144,10 @@ input,textarea,select{transition:border-color var(--dur-2) var(--ease-out),box-s
 
 /* ============================= ACCESSIBILITY ============================= */
 :focus{outline:none}
-:focus-visible{outline:2px solid #4DA8FF;outline-offset:2px;border-radius:6px}
+/* Static CSS can't read the JS palette, so this tracks --lm, set from C on
+   every theme change (see the theme effect) with a teal fallback for the
+   first paint before that effect runs. */
+:focus-visible{outline:2px solid var(--lm,#0D9488);outline-offset:2px;border-radius:6px}
 ::-webkit-scrollbar{width:3px;height:3px}
 ::-webkit-scrollbar-thumb{background:#CBD2DC;border-radius:2px}
 @media(prefers-reduced-motion:reduce){
@@ -169,10 +172,28 @@ const {useState,useRef,useEffect,useCallback}=React;
 // Light is default. Dark mode keeps the accent colors (lm/tl/am/pu/pk/cta/ok/rd) identical
 // so brand identity and semantic meaning (red=danger, green=success) carry over; only
 // the neutrals (bg, sf, cd, bd, tx, mt, dm) flip.
-const LIGHT_C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#4DA8FF',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#4DA8FF',ok:'#6FCF97'};
-const DARK_C={bg:'#0F1419',sf:'#1A1F26',cd:'#1F252D',bd:'#2D3540',lm:'#5BB3FF',tx:'#E8EAED',mt:'#9AA5B1',dm:'#252B33',rd:'#EF4444',tl:'#14B8A6',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#5BB3FF',ok:'#6FCF97'};
+// Accent roles, swapped. `lm` (the primary — prices, CTAs, active tab, the
+// logo lockup) was a generic sky blue that made the app read as any-app; `tl`
+// was a court-teal doing minor duty on wishlist and verification chrome. The
+// two have traded places, so the identity color is now teal and blue steps
+// back into a secondary/informational role. Every `C.lm` and `C.tl` call site
+// keeps working and keeps contrasting — nothing downstream needed touching.
+//
+// Light mode uses teal-600 rather than teal-500: white text on #14B8A6 sits
+// around 2.9:1, which is under the floor for the filled Buy Now / Send Offer
+// buttons. #0D9488 clears 3.9:1 while still reading as the same hue.
+const LIGHT_C={bg:'#FAFAF8',sf:'#FFFFFF',cd:'#FFFFFF',bd:'#E5E7EB',lm:'#0D9488',tx:'#1F2933',mt:'#7A869A',dm:'#F0F2F5',rd:'#EF4444',tl:'#4DA8FF',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#0D9488',ok:'#6FCF97'};
+const DARK_C={bg:'#0F1419',sf:'#1A1F26',cd:'#1F252D',bd:'#2D3540',lm:'#2DD4BF',tx:'#E8EAED',mt:'#9AA5B1',dm:'#252B33',rd:'#EF4444',tl:'#5BB3FF',am:'#F59E0B',pu:'#8B5CF6',pk:'#EC4899',cta:'#2DD4BF',ok:'#6FCF97'};
 let C={...LIGHT_C}; // mutated in-place on theme change so closures see new values
-const applyTheme=(mode)=>{const src=mode==='dark'?DARK_C:LIGHT_C;Object.keys(src).forEach(k=>{C[k]=src[k];});};
+const applyTheme=(mode)=>{
+  const src=mode==='dark'?DARK_C:LIGHT_C;
+  Object.keys(src).forEach(k=>{C[k]=src[k];});
+  // Mirror the palette onto :root as custom properties. The inline-style call
+  // sites all read C directly, but the static <style> block can't — this is
+  // how rules like :focus-visible stay in sync with the active theme.
+  try{const r=document.documentElement;Object.keys(src).forEach(k=>{r.style.setProperty('--'+k,src[k]);});}catch(err){}
+};
+applyTheme('light');
 const e=React.createElement;
 
 // --- PERSISTENT KV (uses same fallback as supabase auth) ---
@@ -1250,7 +1271,11 @@ const MSGS_INIT=[
 ];
 
 const POP_BRANDS=[{name:'Selkirk',col:'#E63946',sub:'Premium carbon paddles'},{name:'JOOLA',col:'#F4A300',sub:'Pro tour standard'},{name:'Engage',col:'#3B82F6',sub:'Power & control'},{name:'Franklin',col:'#10B981',sub:'Ben Johns signature'},{name:'Paddletek',col:'#8B5CF6',sub:'American craftsmanship'},{name:'CRBN',col:'#1F2937',sub:'Raw T700 carbon'}];
-const SHOP_CATS=[{k:'Paddles',ic:'paddle',col:'#6FCF97'},{k:'Shoes',ic:'shoe',col:'#14B8A6'},{k:'Bags',ic:'bag',col:'#F59E0B'},{k:'Apparel',ic:'shirt',col:'#EC4899'},{k:'Accessories',ic:'bolt',col:'#8B5CF6'}];
+// Shoes was #14B8A6 — the exact teal that is now the app's primary accent, so
+// as a chip it would have read as "selected" rather than as one category among
+// five. Moved to indigo, which stays distinct from both the primary and the
+// green on Paddles.
+const SHOP_CATS=[{k:'Paddles',ic:'paddle',col:'#6FCF97'},{k:'Shoes',ic:'shoe',col:'#6366F1'},{k:'Bags',ic:'bag',col:'#F59E0B'},{k:'Apparel',ic:'shirt',col:'#EC4899'},{k:'Accessories',ic:'bolt',col:'#8B5CF6'}];
 
 const gU=(id)=>{
   if(id===0||id==null)return ME;
@@ -2371,6 +2396,11 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   const [refresh,setRefresh]=useState(false);
   const [sampleDismissed,setSampleDismissed]=useState(false);
   const [seeAll,setSeeAll]=useState(null);
+  // Which lens the Browse strip at the foot of the feed is showing. Session
+  // state on purpose — this isn't a preference worth persisting to kv, and
+  // defaulting to Category keeps the first paint identical for a returning
+  // user regardless of what they last poked at.
+  const [browseBy,setBrowseBy]=useState('cat');
   let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
   pool.sort((a,b)=>a.dist-b.dist);
   if(q){const lq=q.toLowerCase();pool=pool.filter(l=>[l.brand,l.model,l.sub].filter(Boolean).join(' ').toLowerCase().includes(lq));}
@@ -2427,8 +2457,66 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     newish.length>0&&e('div',{key:'nn',style:{paddingTop:16}},[e(SH,{title:'New Near You',ic:'clock',sub:'Freshly listed in your area',action:'See all ›',onAction:()=>setSeeAll('fresh')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},newish.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:158}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
     hot.length>0&&e('div',{key:'tr',style:{paddingTop:16}},[e(SH,{title:'Trending This Week',ic:'flame',sub:'Most viewed near you',action:'See all ›',onAction:()=>setSeeAll('trending')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},hot.map(l=>e('div',{key:l.id,onClick:()=>onView(l),style:{flexShrink:0,width:148,background:C.cd,borderRadius:12,border:`1px solid ${C.bd}`,padding:9,cursor:'pointer'}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.lm+'40',sz:30}),e('div',null,[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},listEyebrow(l)),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},listTitle(l).split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},[e('span',{style:{fontSize:13,fontWeight:900,color:C.lm}},`$${l.price}`),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${l.loc}`)]),e('div',{style:{height:3,background:C.dm,borderRadius:2}},[e('div',{style:{height:'100%',width:`${Math.min(100,Math.round(l.views/3.5))}%`,background:C.lm,borderRadius:2}})]),e('div',{style:{fontSize:9,color:C.mt,marginTop:2}},`${l.views} views`)])))]),
     e('div',{key:'js',style:{paddingTop:16}},[e(SH,{title:'Recently Sold Locally',ic:'check',sub:'Snapshot of recent deals near you'}),e('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SOLD.map(s=>e('div',{key:s.id,style:{flexShrink:0,width:158,background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:9,opacity:.85}},[e('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:6}},[e(PSv,{col:C.mt+'70',sz:28}),e('div',null,[e('div',{style:{fontSize:9,color:C.mt,fontWeight:800}},s.brand),e('div',{style:{fontSize:10,fontWeight:700,color:C.tx,lineHeight:1.2}},s.model.split(' ').slice(0,3).join(' '))])]),e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},[e('div',null,[e('span',{style:{fontSize:13,fontWeight:900,color:C.ok}},`$${s.price}`),e('span',{style:{fontSize:9,color:C.mt,textDecoration:'line-through',marginLeft:5}},`$${s.orig}`)]),e('span',{style:{fontSize:9,color:C.ok,fontWeight:800,background:C.ok+'20',borderRadius:5,padding:'2px 6px'}},'SOLD')]),e(IcTxt,{n:'pin',s:9,style:{fontSize:9,color:C.mt}},`${s.loc} · ${s.ago} ago`)])))]),
-    e('div',{key:'cat',style:{paddingTop:16}},[e(SH,{title:'Shop by Category'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>{const ct=LS.filter(l=>l.cat===c.k.toLowerCase().replace('paddles','paddle').replace('bags','bag')).length;return e('div',{key:c.k,onClick:()=>onCatSelect(c.k),style:{flexShrink:0,width:108,height:128,borderRadius:13,background:`linear-gradient(160deg,${c.col}25,${c.col}08)`,border:`1px solid ${c.col}40`,padding:'12px 11px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between'}},[e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}},[e(Ic,{n:c.ic,s:30,c:c.col,sw:1.5}),e(Ic,{n:'chevron',s:14,c:c.col})]),e('div',null,[e('div',{style:{fontSize:13,fontWeight:900,color:C.tx,marginBottom:1}},c.k),e('div',{style:{fontSize:9,color:C.mt}},`${ct} listings`)])]);}))]),
-    e('div',{key:'br',style:{paddingTop:16,paddingBottom:18}},[e(SH,{title:'Popular Brands'}),e('div',{style:{display:'flex',gap:9,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>{const ct=LS.filter(l=>l.brand===b.name).length;return e('div',{key:b.name,onClick:()=>onBrandSelect(b.name),style:{flexShrink:0,width:140,height:108,borderRadius:13,background:`linear-gradient(135deg,${b.col},${b.col}AA)`,padding:'11px 12px',cursor:'pointer',display:'flex',flexDirection:'column',justifyContent:'space-between',position:'relative',overflow:'hidden'}},[e('div',{style:{position:'absolute',right:-12,bottom:-22,fontSize:80,opacity:.08,color:'#fff',fontWeight:900}},b.name.charAt(0)),e('div',{style:{position:'relative',zIndex:1}},[e('div',{style:{fontSize:14,fontWeight:900,color:'#fff',lineHeight:1.1,marginBottom:3}},b.name),e('div',{style:{fontSize:9,color:'#ffffffCC'}},b.sub)]),e('div',{style:{display:'flex',justifyContent:'space-between',position:'relative',zIndex:1}},[e('div',{className:'tnum',style:{fontSize:10,color:'#fff',fontWeight:700,background:'rgba(0,0,0,0.25)',borderRadius:6,padding:'2px 7px'}},`${ct} items`),e(Ic,{n:'chevron',s:14,c:'#fff',sw:2.25})])]);}))]),
+    // Browse — one section where there used to be two.
+    //
+    // "Shop by Category" and "Popular Brands" were stacked full-width rails of
+    // gradient cards at the foot of a feed that already runs six horizontal
+    // rails above them. Two problems. First, card-shaped tiles read as
+    // *featured content* — the same visual weight as a merchandised promo —
+    // when both are really just filters; by the time you scroll this far the
+    // eye has stopped distinguishing one slab from the next. Second, they put
+    // five muted category hues directly above six saturated full-bleed brand
+    // gradients, so the bottom of the feed carried more competing color than
+    // the listings it exists to route you toward.
+    //
+    // Both paths survive intact — nothing is being removed as a feature, and
+    // brand is arguably the stronger signal here given how paddle-heavy the
+    // inventory is. They just share one strip of chips behind a toggle now.
+    // A chip reads as "quick filter," which is what these always were.
+    //
+    // The per-tile "N listings" / "N items" counts are gone. They never
+    // decided anything — nobody picks Paddles over Accessories on inventory
+    // volume — and they degraded badly at the low end, where a thin category
+    // rendered as "Accessories · 0 listings" and looked broken rather than
+    // simply empty. Empty categories are now just quiet, which is honest:
+    // tapping one lands on the Market tab's own empty state, which already
+    // explains itself and offers a way out.
+    e('div',{key:'browse',style:{paddingTop:16,paddingBottom:18}},[
+      e('div',{key:'h',style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9,padding:'0 14px'}},[
+        e('div',{key:'t',style:{fontSize:13,fontWeight:800,color:C.tx,letterSpacing:'-0.02em',display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:'grid',s:14,c:C.lm}),'Browse']),
+        // Segmented control. Both halves stay visible and legible at rest so
+        // it reads as a choice rather than as a single button whose label
+        // changes — the active half is filled, the inactive one is a plain
+        // label, and the whole thing is a radiogroup for assistive tech.
+        e('div',{key:'sg',role:'radiogroup','aria-label':'Browse by',style:{display:'flex',gap:2,background:C.dm,borderRadius:9,padding:2}},
+          [{k:'cat',l:'Category'},{k:'brand',l:'Brand'}].map(o=>e('button',{
+            key:o.k,role:'radio','aria-checked':browseBy===o.k,onClick:()=>{haptic();setBrowseBy(o.k);},
+            style:{background:browseBy===o.k?C.cd:'transparent',border:'none',borderRadius:7,padding:'4px 10px',fontSize:10,fontWeight:browseBy===o.k?800:600,color:browseBy===o.k?C.tx:C.mt,cursor:'pointer',fontFamily:'inherit',boxShadow:browseBy===o.k?'var(--sh-1)':'none',transition:'background var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out)'}
+          },o.l))),
+      ]),
+      browseBy==='cat'
+        ?e('div',{key:'cchips',style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},SHOP_CATS.map(c=>e('button',{
+            key:c.k,onClick:()=>onCatSelect(c.k),'data-press':'1',
+            style:{flexShrink:0,display:'inline-flex',alignItems:'center',gap:7,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,padding:'9px 13px 9px 10px',cursor:'pointer',boxShadow:'var(--sh-1)',fontFamily:'inherit'}
+          },[
+            // The category color survives the redesign, but as a small tinted
+            // icon well instead of the tile's whole background — enough to
+            // keep the row scannable by color, not enough to compete with the
+            // listing cards above it.
+            e('span',{key:'i',style:{width:26,height:26,borderRadius:8,background:c.col+'1F',display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:0}},[e(Ic,{n:c.ic,s:15,c:c.col,sw:1.75})]),
+            e('span',{key:'l',style:{fontSize:12,fontWeight:700,color:C.tx,whiteSpace:'nowrap'}},c.k),
+          ])))
+        :e('div',{key:'bchips',style:{display:'flex',gap:8,overflowX:'auto',padding:'0 14px 4px'}},POP_BRANDS.map(b=>e('button',{
+            key:b.name,onClick:()=>onBrandSelect(b.name),'data-press':'1',title:b.sub,
+            style:{flexShrink:0,display:'inline-flex',alignItems:'center',gap:7,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,padding:'9px 13px 9px 10px',cursor:'pointer',boxShadow:'var(--sh-1)',fontFamily:'inherit'}
+          },[
+            // Brand color, reduced from a full-bleed gradient to a monogram
+            // well. Same recognition cue, a fraction of the ink — and six of
+            // these in a row no longer fights the five above it.
+            e('span',{key:'m',style:{width:26,height:26,borderRadius:8,background:b.col+'1F',color:b.col,display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:12,fontWeight:900}},b.name.charAt(0)),
+            e('span',{key:'l',style:{fontSize:12,fontWeight:700,color:C.tx,whiteSpace:'nowrap'}},b.name),
+          ]))),
+    ]),
   ]);
 }
 
