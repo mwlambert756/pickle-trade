@@ -2341,7 +2341,7 @@ function SavedOverlay({onClose,saved,onSave,onView,savedMeta}){
 // minP/maxP are STRINGS ('' = unset) because they're backed by text inputs.
 // Either can stand alone: min only = "that price and above", max only = "that
 // price and below", both = a closed band, neither = no price filtering at all.
-const initFilters={brands:[],modelQ:'',cond:'All',minP:'',maxP:'',maxD:25,core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',sub:'All',gender:'All',size:'All',btype:'All'};
+const initFilters={brands:[],modelQ:'',cond:'All',minP:'',maxP:'',core:'All',face:'All',shape:'All',weight:'All',thk:'All',grLen:'All',sub:'All',gender:'All',size:'All',btype:'All'};
 // Parse a price box to a number, or null when it's blank/garbage.
 const priceNum=(v)=>{if(v===''||v==null)return null;const n=Number(v);return isNaN(n)?null:n;};
 // Hydration guard. Filters persist to kv and ride along in saved searches, so
@@ -2358,7 +2358,7 @@ const normFilters=(f)=>{
 };
 // A price range counts as ONE active filter even when both boxes are filled —
 // the badge should read "1 filter", not "2", for a single conceptual choice.
-const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(priceNum(f.minP)!=null||priceNum(f.maxP)!=null)c++;if(f.maxD!==25)c++;['core','face','shape','weight','thk','grLen','sub','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
+const filterCount=(f)=>{let c=0;if(f.brands.length)c++;if(f.modelQ)c++;if(f.cond!=='All')c++;if(priceNum(f.minP)!=null||priceNum(f.maxP)!=null)c++;['core','face','shape','weight','thk','grLen','sub','gender','size','btype'].forEach(k=>{if(f[k]&&f[k]!=='All')c++;});return c;};
 
 // Hoisted out of FilterPanel: when these were defined inside the component body
 // they got a fresh function identity every render, so React remounted the whole
@@ -2422,7 +2422,6 @@ function FilterPanel({onClose,onApply,filters,cat}){
         ]),
         e('div',{key:'h',style:{fontSize:9,color:priceBad?C.rd:C.mt,marginTop:6,lineHeight:1.45,fontWeight:priceBad?700:500}},priceHint),
       ])}),
-      e(Sec,{title:`MAX DISTANCE — ${f.maxD}mi`,c:e('input',{type:'range',min:1,max:200,step:1,value:f.maxD,onChange:ev=>up('maxD',+ev.target.value),style:{width:'100%',accentColor:C.lm}})}),
     ]),
     e('div',{key:'f',style:{padding:'10px 14px',background:C.sf,borderTop:`1px solid ${C.dm}`}},[e('button',{onClick:()=>{if(priceBad)return;onApply(f);onClose();},disabled:priceBad,style:{width:'100%',padding:'12px 0',borderRadius:11,background:priceBad?C.dm:C.lm,border:'none',cursor:priceBad?'not-allowed':'pointer',fontSize:14,fontWeight:800,color:priceBad?C.mt:'#fff'}},priceBad?'Fix the price range to continue':'Apply Filters')]),
   ]);
@@ -2477,7 +2476,42 @@ function FeedSectionView({title,sub,ic,items,empty,onBack,onView,saved,onSave}){
   ]);
 }
 
-function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch,demoData,onCreate}){
+// Distance stops for the shared radius picker used by Discover and Market.
+// Previously each tab had its own idea of "how far": Discover was hardcoded
+// to a fixed 25mi/Anywhere binary, and Market ran a private continuous
+// 1-200mi slider buried in its filter panel — so switching one tab's notion
+// of distance had no relationship to the other's. Both tabs now read and
+// write the same value through the same control. Each stop is roughly double
+// the one before it — fine control close to home, where an extra mile or two
+// actually changes who's reachable, and coarse control further out, where
+// the difference between 150mi and 200mi rarely changes the decision to
+// look. 'anywhere' is the unbounded top of the list.
+const DIST_STOPS=[5,10,25,50,100,250];
+
+// Shared radius chip + dropdown. Manages its own open/closed state; the
+// selected distance itself is owned by the caller (App) and passed down, so
+// Discover and Market read and write the exact same value.
+function DistPicker({dist,onChange}){
+  const [open,setOpen]=useState(false);
+  return e('div',{style:{position:'relative',display:'inline-block'}},[
+    e('button',{onClick:()=>setOpen(v=>!v),'aria-haspopup':'menu','aria-expanded':open,style:{background:dist==='anywhere'?C.tl+'20':C.lm+'20',border:`1px solid ${(dist==='anywhere'?C.tl:C.lm)}40`,borderRadius:9,padding:'3px 8px 3px 9px',fontSize:9,color:dist==='anywhere'?C.tl:C.lm,fontWeight:800,letterSpacing:.5,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:4}},[
+      e(Ic,{key:'i',n:dist==='anywhere'?'globe':'pin',s:10}),
+      dist==='anywhere'?'ANYWHERE':`MARYVILLE · ${dist}MI`,
+      e(Ic,{key:'c',n:'chevron',s:9,sw:2.5,style:{transform:open?'rotate(-90deg)':'rotate(90deg)',transition:'transform var(--dur-2) var(--ease-out)'}}),
+    ]),
+    open&&[
+      // Invisible full-frame catcher so a tap anywhere else closes the menu.
+      e('div',{key:'bd',onClick:()=>setOpen(false),style:{position:'fixed',inset:0,zIndex:29}}),
+      e('div',{key:'dd',role:'menu','aria-label':'Distance',style:{position:'absolute',top:'calc(100% + 6px)',left:0,background:C.bg,border:`1px solid ${C.bd}`,borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.18)',zIndex:30,padding:5,minWidth:158}},[
+        ...DIST_STOPS.map(d=>e('button',{key:d,role:'menuitemradio','aria-checked':dist===d,onClick:()=>{onChange(d);setOpen(false);},style:{display:'block',width:'100%',textAlign:'left',padding:'8px 10px',borderRadius:8,border:'none',background:dist===d?C.lm+'15':'transparent',color:dist===d?C.lm:C.tx,fontSize:12,fontWeight:dist===d?800:600,cursor:'pointer'}},`Within ${d} mi`)),
+        e('div',{key:'div',style:{height:1,background:C.dm,margin:'4px 2px'}}),
+        e('button',{key:'any',role:'menuitemradio','aria-checked':dist==='anywhere',onClick:()=>{onChange('anywhere');setOpen(false);},style:{display:'block',width:'100%',textAlign:'left',padding:'8px 10px',borderRadius:8,border:'none',background:dist==='anywhere'?C.tl+'15':'transparent',color:dist==='anywhere'?C.tl:C.tx,fontSize:12,fontWeight:dist==='anywhere'?800:600,cursor:'pointer'}},'Anywhere'),
+      ]),
+    ],
+  ]);
+}
+
+function FeedTab({onView,saved,onSave,dist,onDistChange,onCatSelect,onBrandSelect,onWishPrompt,following,onRefresh,recentlyViewed,dataLoading,onSavedSearch,demoData,onCreate}){
   const [q,setQ]=useState('');
   const [refresh,setRefresh]=useState(false);
   const [sampleDismissed,setSampleDismissed]=useState(false);
@@ -2487,7 +2521,7 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   // defaulting to Category keeps the first paint identical for a returning
   // user regardless of what they last poked at.
   const [browseBy,setBrowseBy]=useState('cat');
-  let pool=locMode==='local'?LS.filter(l=>l.dist<=25):[...LS];
+  let pool=dist==='anywhere'?[...LS]:LS.filter(l=>l.dist<=dist);
   pool.sort((a,b)=>a.dist-b.dist);
   if(q){const lq=q.toLowerCase();pool=pool.filter(l=>[l.brand,l.model,l.sub].filter(Boolean).join(' ').toLowerCase().includes(lq));}
   const wishMatches=findWishMatches();
@@ -2522,7 +2556,11 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     refresh&&e('div',{key:'rf',style:{padding:'6px 0',textAlign:'center',background:C.sf,fontSize:10,color:C.lm,fontWeight:700}},e(IcTxt,{n:'refresh',s:11},'Refreshing…')),
     e('div',{key:'h',style:{padding:'12px 14px 10px',background:C.sf}},[
       e('div',{key:'t',style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:11}},[
-        e('div',null,[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:9,padding:'3px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:800,letterSpacing:.5,cursor:'pointer'}},locMode==='local'?e(IcTxt,{n:'pin',s:10},'MARYVILLE · 25mi'):e(IcTxt,{n:'globe',s:10},'ANYWHERE')),e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},locMode==='local'?'Maryville':'Anywhere'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listing${pool.length===1?'':'s'} ${q?'matching your search':'nearby'}`)]),
+        e('div',null,[
+          e(DistPicker,{key:'lw',dist,onChange:onDistChange}),
+          e('div',{style:{fontSize:22,fontWeight:900,color:C.tx,lineHeight:1.1,marginTop:6}},dist==='anywhere'?'Anywhere':'Maryville'),
+          e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${pool.length} listing${pool.length===1?'':'s'} ${q?'matching your search':'nearby'}`),
+        ]),
         e('button',{onClick:handleRefresh,disabled:refresh,style:{background:C.cd,border:`1px solid ${C.bd}`,borderRadius:9,padding:'5px 9px',cursor:refresh?'default':'pointer',color:C.mt,fontSize:13,opacity:refresh?.5:1}},e('span',{style:{display:'inline-flex',animation:refresh?'spin .9s linear infinite':'none'}},[e(Ic,{n:'refresh',s:15})])),
       ]),
       e('div',{key:'s'},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search paddles, brands, players…',onSaveSearch:(t)=>{savedSearchesAdd(t,{});onSavedSearch&&onSavedSearch(t);}})]),
@@ -2534,8 +2572,8 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
     q&&pool.length===0&&!dataLoading&&e('div',{key:'noresults',style:{padding:'40px 24px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,textAlign:'center'}},[
       e(Ic,{n:'search',s:38,c:C.mt+'66',sw:1.25}),
       e('div',{style:{fontSize:13,fontWeight:800,color:C.tx}},`No results for "${q}"`),
-      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,maxWidth:240}},locMode==='local'?'Try expanding to Anywhere, or save a wishlist to be notified when matches appear.':'Try a different brand or model name.'),
-      locMode==='local'&&e('button',{onClick:onLocToggle,style:{padding:'7px 14px',borderRadius:10,background:C.lm+'15',border:`1px solid ${C.lm}40`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:'globe',s:12}),'Search Anywhere']),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.5,maxWidth:240}},dist!=='anywhere'?'Try expanding your distance, or save a wishlist to be notified when matches appear.':'Try a different brand or model name.'),
+      dist!=='anywhere'&&e('button',{onClick:()=>onDistChange('anywhere'),style:{padding:'7px 14px',borderRadius:10,background:C.lm+'15',border:`1px solid ${C.lm}40`,color:C.lm,fontSize:11,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:'globe',s:12}),'Search Anywhere']),
     ]),
     recents.length>0&&!q&&e('div',{key:'rv',style:{paddingTop:14}},[e(SH,{title:'Recently Viewed',ic:'clock',sub:'Pick up where you left off'}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},recents.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:148}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave})])))]),
     wishMatches.length>0?e('div',{key:'wl',style:{paddingTop:14}},[e(SH,{title:'Based on Your Wishlist',ic:'bolt',sub:`${wishMatches.length} match${wishMatches.length===1?'':'es'} from your list`,action:'See all ›',onAction:()=>setSeeAll('wishlist')}),e('div',{style:{display:'flex',gap:10,overflowX:'auto',padding:'0 14px 4px'}},wishMatches.map(l=>e('div',{key:l.id,style:{flexShrink:0,width:172}},[e(LCard,{L:l,onView:()=>onView(l),saved:saved.includes(l.id),onSave,large:true})])))]):e('div',{key:'wp',style:{margin:'14px 14px 0',background:C.tl+'10',borderRadius:13,padding:14,border:`1px dashed ${C.tl}50`,cursor:'pointer'},onClick:onWishPrompt},[e('div',{style:{display:'flex',alignItems:'center',gap:11}},[e(Ic,{n:'search',s:26,c:C.tl,sw:1.5}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:13,fontWeight:800,color:C.tl}},'Build your wishlist'),e('div',{style:{fontSize:10,color:C.mt,marginTop:2,lineHeight:1.4}},'Get notified when paddles you want list near you')]),e(Ic,{n:'chevron',s:16,c:C.tl})])]),
@@ -2606,7 +2644,7 @@ function FeedTab({onView,saved,onSave,locMode,onLocToggle,onCatSelect,onBrandSel
   ]);
 }
 
-function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,setFilters,onLoadMore,hasMore,showToast}){
+function MarketTab({onView,saved,onSave,dist,onDistChange,cat,setCat,filters,setFilters,onLoadMore,hasMore,showToast}){
   const [q,setQ]=useState('');
   const [showPanel,setShowPanel]=useState(false);
   const [sort,setSort]=useState('dist');
@@ -2622,7 +2660,7 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   const cats=['Paddles','Gear','All'];
   const catCount=(c)=>c==='All'?LS.length:LS.filter(l=>l.cat===cMap[c]).length;
   let R=[...LS];
-  if(locMode==='local')R=R.filter(l=>l.dist<=filters.maxD);
+  if(dist!=='anywhere')R=R.filter(l=>l.dist<=dist);
   if(q){const lq=q.toLowerCase();R=R.filter(l=>[l.brand,l.model,l.desc,l.loc,l.sub,CL[l.cat],(gU(l.sid)||{}).name].filter(Boolean).join(' ').toLowerCase().includes(lq));}
   if(cat!=='All')R=R.filter(l=>l.cat===cMap[cat]);
   if(filters.brands.length)R=R.filter(l=>filters.brands.includes(l.brand));
@@ -2649,7 +2687,7 @@ function MarketTab({onView,saved,onSave,locMode,onLocToggle,cat,setCat,filters,s
   return e('div',{style:{flex:1,overflowY:'auto',position:'relative'}},[
     showPanel&&e(FilterPanel,{onClose:()=>setShowPanel(false),onApply:setFilters,filters,cat:cat==='All'?'Paddles':cat}),
     e('div',{key:'t',style:{padding:'10px 14px 0',background:C.sf,borderBottom:`1px solid ${C.dm}`}},[
-      e('div',{style:{marginBottom:8}},[e('button',{onClick:onLocToggle,style:{background:locMode==='local'?C.lm+'20':C.tl+'20',border:`1px solid ${(locMode==='local'?C.lm:C.tl)}40`,borderRadius:8,padding:'4px 9px',fontSize:9,color:locMode==='local'?C.lm:C.tl,fontWeight:700,cursor:'pointer'}},locMode==='local'?e(IcTxt,{n:'pin',s:10},`Within ${filters.maxD}mi`):e(IcTxt,{n:'globe',s:10},'Anywhere'))]),
+      e('div',{style:{marginBottom:8}},[e(DistPicker,{dist,onChange:onDistChange})]),
       e('div',{style:{marginBottom:9}},[e(SmartSearch,{value:q,onChange:setQ,placeholder:'Search all gear, sellers, descriptions…',onSaveSearch:saveSearch})]),
       savedSearches.length>0&&e('div',{style:{display:'flex',gap:5,overflowX:'auto',paddingBottom:8}},savedSearches.map(ss=>e('div',{key:ss.id,style:{display:'flex',alignItems:'center',gap:5,padding:'4px 8px',borderRadius:12,background:C.tl+'12',border:`1px solid ${C.tl}35`,flexShrink:0}},[
         e('button',{key:'g',onClick:()=>{setQ(ss.q);if(ss.ctx&&ss.ctx.cat)setCat(ss.ctx.cat);if(ss.ctx&&ss.ctx.filters)setFilters(normFilters(ss.ctx.filters));},style:{background:'transparent',border:'none',color:C.tl,fontSize:10,fontWeight:700,cursor:'pointer',padding:0,whiteSpace:'nowrap'}},e(IcTxt,{n:'bookmark',s:10},ss.q)),
@@ -4841,7 +4879,12 @@ function App(){
   const [savedOpen,setSavedOpen]=useState(false);
   const [settingsOpen,setSettingsOpen]=useState(false);
   const [offerOpen,setOfferOpen]=useState(null);
-  const [locMode,setLocMode]=useState(()=>kv.get('locMode','local'));
+  // Shared radius for both Discover and Market — previously each tab kept its
+  // own idea of distance (Discover: hardcoded 25mi/Anywhere binary; Market:
+  // the same binary gating a private 1-200mi slider), so the two never agreed
+  // and switching one didn't reflect in the other. One value, one control
+  // (DistPicker), read and written by both tabs now.
+  const [browseDist,setBrowseDist]=useState(()=>kv.get('browseDist',25));
   // Paddles are the core of the marketplace, so that's the default landing category.
   // Stale values from the retired Shoes/Bags/Apparel/Accessories tabs map to Gear.
   const [marketCat,setMarketCat]=useState(()=>{const v=kv.get('marketCat','Paddles');return ['All','Paddles','Gear'].includes(v)?v:'Gear';});
@@ -4914,7 +4957,7 @@ function App(){
   const showError=useCallback((msg)=>setErrorMsg(msg),[]);
 
   // Persist filters/location/category on change
-  useEffect(()=>{kv.set('locMode',locMode);},[locMode]);
+  useEffect(()=>{kv.set('browseDist',browseDist);},[browseDist]);
   useEffect(()=>{kv.set('marketCat',marketCat);},[marketCat]);
   useEffect(()=>{kv.set('marketFilters',marketFilters);},[marketFilters]);
 
@@ -5393,7 +5436,6 @@ function App(){
     });
     return()=>{mounted=false;};
   },[me]);
-  const togLoc=()=>setLocMode(m=>m==='local'?'anywhere':'local');
   const handlePost=async(formData,photoFiles)=>{
     if(!me?.id)return;
     // --- SECURITY: sanitize every user-typed field before it touches the DB ---
@@ -5792,8 +5834,8 @@ function App(){
         !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{openPanel('settings');setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
           view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:savedStatusFor(view,savedMeta&&savedMeta[view.id]).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
-          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
-          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,locMode,onLocToggle:togLoc,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
+          !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
+          !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
           !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),onOpenDupr:()=>setDuprOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
