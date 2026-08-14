@@ -1777,7 +1777,7 @@ function withTimeout(p,ms=SAVE_TIMEOUT_MS){
   ]).then(r=>{clearTimeout(t);return r;});
 }
 
-function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,onOpenDupr,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
+function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety,verified,onOpenVerify,onOpenDupr,onOpenChangePassword,pushOn,onTogglePush,onOpenLegal,onOpenProhibited,onOpenBlocked,onDeleteAccount,showToast}){
   const [s,setS]=useState({...settings});
   const [optOut,setOptOut]=useState(()=>analyticsOptedOut());
   const [blockedN,setBlockedN]=useState(()=>blockedCount());
@@ -1909,6 +1909,12 @@ function SettingsOverlay({onClose,settings,setSettings,onSignOut,me,onOpenSafety
           r:verified
             ?e('span',{style:{fontSize:11,color:C.ok,fontWeight:800}},e(IcTxt,{n:'shieldCheck',s:12},'Verified'))
             :e('button',{onClick:onOpenVerify,style:{padding:'5px 12px',borderRadius:8,border:VERIFY.enabled?'none':`1px solid ${C.bd}`,background:VERIFY.enabled?C.tl:'transparent',color:VERIFY.enabled?'#fff':C.mt,fontSize:10,fontWeight:800,cursor:'pointer'}},VERIFY.enabled?'Verify':'Learn more')}),
+      ]),
+      e(Sec,{title:'SECURITY',key:'sec'},[
+        e('div',{key:'cpw',onClick:()=>onOpenChangePassword&&onOpenChangePassword(),role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',cursor:'pointer'}},[
+          e('div',{key:'l'},[e('div',{style:{fontSize:12,color:C.tx,fontWeight:600}},'Change password'),e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},'Update the password you sign in with')]),
+          e(Ic,{key:'c',n:'chevron',s:14,c:C.mt}),
+        ]),
       ]),
       e(Sec,{title:'PRIVACY & SAFETY',key:'pr'},[
         e(Row,{key:'lp',label:'Show exact location',desc:'Off shows only city',r:e(Tog,{on:s.preciseLoc,onChange:()=>up('preciseLoc',!s.preciseLoc)})}),
@@ -3879,6 +3885,56 @@ function AuthScreen({onSignedIn}){
   ]);
 }
 
+// Shown when Supabase reports a PASSWORD_RECOVERY auth event — i.e. the user
+// arrived via the "reset your password" email link. That link authenticates
+// them (so the client can call updateUser), but authenticating is not the
+// same as actually changing the password: previously nothing consumed this
+// event, so it fell through to the same handling as a normal sign-in and
+// dropped the user straight into the app with their OLD password still valid
+// and no prompt to set a new one. This screen is the missing step — it holds
+// the user here until they set a new password (or cancel out and sign out),
+// and only then hands control back to the normal auth flow.
+function SetNewPasswordScreen({onDone,onCancel}){
+  const [pw,setPw]=useState('');
+  const [pw2,setPw2]=useState('');
+  const [err,setErr]=useState('');
+  const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    setErr('');
+    if(pw.length<8){setErr('Password must be at least 8 characters.');return;}
+    if(pw!==pw2){setErr('Passwords don\u2019t match.');return;}
+    setBusy(true);
+    try{
+      const {error}=await sb.auth.updateUser({password:pw});
+      if(error)throw error;
+      onDone&&onDone();
+    }catch(ex){
+      setErr(ex.message||'Could not update your password. The link may have expired — request a new one.');
+    }
+    setBusy(false);
+  };
+  const cancel=async()=>{
+    setBusy(true);
+    try{await sb.auth.signOut();}catch(ex){/* ignore — onCancel clears local state regardless */}
+    setBusy(false);
+    onCancel&&onCancel();
+  };
+  const IS={width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:13,outline:'none',marginBottom:10};
+  return e('div',{style:{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',padding:'0 22px',background:C.bg}},[
+    e('div',{key:'lg',style:{textAlign:'center',marginBottom:20}},[
+      e('div',{style:{fontSize:23,fontWeight:800,color:C.lm,letterSpacing:'-0.035em'}},'DINK EXCHANGE'),
+      e('div',{style:{fontSize:11,color:C.mt,marginTop:4}},'Set a new password'),
+    ]),
+    e('div',{key:'ic',style:{marginBottom:16,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:36,c:C.lm,sw:1.5})]),
+    e('div',{key:'sb',style:{fontSize:12,color:C.mt,lineHeight:1.55,marginBottom:16,textAlign:'center'}},'Choose a new password for your account. You\u2019ll be signed in once it\u2019s set.'),
+    e('input',{key:'p1',value:pw,onChange:ev=>setPw(ev.target.value),placeholder:'New password',type:'password',autoFocus:true,style:IS}),
+    e('input',{key:'p2',value:pw2,onChange:ev=>setPw2(ev.target.value),placeholder:'Confirm new password',type:'password',style:IS,onKeyDown:ev=>ev.key==='Enter'&&submit()}),
+    err&&e('div',{key:'er',style:{fontSize:11,color:C.rd,marginBottom:10,padding:'8px 11px',background:C.rd+'15',borderRadius:8,border:`1px solid ${C.rd}30`}},err),
+    e('button',{key:'go',onClick:submit,disabled:busy||!pw||!pw2,style:{width:'100%',padding:'13px 0',borderRadius:11,background:(busy||!pw||!pw2)?C.dm:C.cta,border:'none',cursor:busy?'default':'pointer',fontSize:14,fontWeight:800,color:'#fff',marginBottom:12}},busy?'Saving\u2026':'Set new password'),
+    e('button',{key:'cx',onClick:cancel,disabled:busy,style:{width:'100%',background:'none',border:'none',color:C.mt,fontSize:11,cursor:busy?'default':'pointer'}},'Cancel and sign out'),
+  ]);
+}
+
 function LoadingScreen(){
   const [slow,setSlow]=useState(false);
   useEffect(()=>{const t=setTimeout(()=>setSlow(true),4000);return()=>clearTimeout(t);},[]);
@@ -4452,6 +4508,70 @@ function ListingAnalyticsModal({L,onClose}){
 }
 
 // --- Identity / phone verification flow ---
+// Change password from Settings, for a user who already knows their current
+// password (as opposed to AuthScreen's sendReset/SetNewPasswordScreen, which
+// exist for the case where they don't). Re-authenticates with the current
+// password first — updateUser() only needs a live session and would happily
+// accept a new password from anyone typing at an already-unlocked device, so
+// asking for the current one here is what actually confirms it's the account
+// owner making the change.
+function ChangePasswordModal({onClose,showToast}){
+  const [curPw,setCurPw]=useState('');
+  const [pw,setPw]=useState('');
+  const [pw2,setPw2]=useState('');
+  const [err,setErr]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [done,setDone]=useState(false);
+  const submit=async()=>{
+    setErr('');
+    if(!curPw){setErr('Enter your current password.');return;}
+    if(pw.length<8){setErr('New password must be at least 8 characters.');return;}
+    if(pw!==pw2){setErr('New passwords don\u2019t match.');return;}
+    if(pw===curPw){setErr('New password must be different from your current one.');return;}
+    setBusy(true);
+    try{
+      const {data:userData,error:getErr}=await sb.auth.getUser();
+      if(getErr||!userData?.user?.email)throw new Error('Could not confirm your account. Try signing in again.');
+      // Re-authenticating with the current password is the closest thing to a
+      // "verify current password" check the auth API offers.
+      const {error:reauthErr}=await sb.auth.signInWithPassword({email:userData.user.email,password:curPw});
+      if(reauthErr)throw new Error('Current password is incorrect.');
+      const {error:updErr}=await sb.auth.updateUser({password:pw});
+      if(updErr)throw updErr;
+      setDone(true);
+      showToast&&showToast('Password updated');
+    }catch(ex){
+      setErr(ex.message||'Could not update your password. Try again.');
+    }
+    setBusy(false);
+  };
+  const wrap=(children)=>e('div',{role:'dialog','aria-modal':'true','aria-label':'Change password',style:{position:'absolute',inset:0,background:'rgba(16,24,40,0.55)',backdropFilter:'blur(3px)',animation:'fadeIn var(--dur-2) var(--ease-out)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:20}},[
+    e('div',{style:{background:C.bg,borderRadius:18,padding:22,width:'100%',maxWidth:330,animation:'scaleIn var(--dur-2) var(--ease-spring)',border:`1px solid ${C.bd}`}},children),
+  ]);
+  const IS={width:'100%',padding:'12px 14px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,color:C.tx,fontSize:13,outline:'none',marginBottom:10};
+  if(done)return wrap([
+    e('div',{key:'i',style:{textAlign:'center'}},[
+      e('div',{style:{marginBottom:12,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:36,c:C.ok,sw:1.5})]),
+      e('div',{style:{fontSize:16,fontWeight:900,color:C.tx,marginBottom:6}},'Password updated'),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55,marginBottom:16}},'Use your new password the next time you sign in.'),
+      e('button',{onClick:onClose,style:{width:'100%',padding:'12px 0',borderRadius:12,background:C.lm,border:'none',cursor:'pointer',fontSize:13,fontWeight:800,color:'#fff'}},'Done'),
+    ]),
+  ]);
+  return wrap([
+    e('div',{key:'i',style:{textAlign:'center',marginBottom:16}},[
+      e('div',{style:{marginBottom:10,display:'flex',justifyContent:'center'}},[e(Ic,{n:'shieldCheck',s:32,c:C.lm,sw:1.5})]),
+      e('div',{style:{fontSize:17,fontWeight:900,color:C.tx,marginBottom:4}},'Change password'),
+      e('div',{style:{fontSize:11,color:C.mt,lineHeight:1.55}},'Signed up with Google and don\u2019t have a password yet? Sign out and use \u201cForgot your password?\u201d instead to set one.'),
+    ]),
+    e('input',{key:'cp',value:curPw,onChange:ev=>setCurPw(ev.target.value),placeholder:'Current password',type:'password',autoComplete:'current-password',style:IS}),
+    e('input',{key:'p1',value:pw,onChange:ev=>setPw(ev.target.value),placeholder:'New password',type:'password',autoComplete:'new-password',style:IS}),
+    e('input',{key:'p2',value:pw2,onChange:ev=>setPw2(ev.target.value),placeholder:'Confirm new password',type:'password',autoComplete:'new-password',style:IS,onKeyDown:ev=>ev.key==='Enter'&&submit()}),
+    err&&e('div',{key:'er',style:{fontSize:11,color:C.rd,marginBottom:10,padding:'8px 11px',background:C.rd+'15',borderRadius:8,border:`1px solid ${C.rd}30`}},err),
+    e('button',{key:'go',onClick:submit,disabled:busy||!curPw||!pw||!pw2,style:{width:'100%',padding:'13px 0',borderRadius:12,background:(busy||!curPw||!pw||!pw2)?C.dm:C.lm,border:'none',cursor:busy?'default':'pointer',fontSize:13,fontWeight:800,color:'#fff',marginBottom:9}},busy?'Updating\u2026':'Update password'),
+    e('button',{key:'cx',onClick:onClose,disabled:busy,style:{width:'100%',padding:'7px 0',background:'transparent',border:'none',color:C.mt,fontSize:11,cursor:busy?'default':'pointer'}},'Cancel'),
+  ]);
+}
+
 function VerificationModal({onClose,onVerified,showToast}){
   const [step,setStep]=useState(VERIFY.enabled?'phone':'unavailable');
   const [phone,setPhone]=useState('');
@@ -4704,6 +4824,11 @@ function DisputeModal({deal,onClose,onSubmit}){
 
 function App(){
   const [authState,setAuthState]=useState('loading');
+  // True while the current session came from a "reset your password" email
+  // link and a new password hasn't been set yet. Sits in front of the normal
+  // authState gate below so a recovery link can never fall through into the
+  // signed-in app before the password is actually changed.
+  const [pwRecovery,setPwRecovery]=useState(false);
   const [me,setMe]=useState(null);
   const [tab,setTab]=useState('feed');
   const [view,setView]=useState(null);
@@ -4738,6 +4863,7 @@ function App(){
   const [sellerView,setSellerView]=useState(null);   // public seller profile overlay
   const [verifyOpen,setVerifyOpen]=useState(false);  // identity/phone verification
   const [duprOpen,setDuprOpen]=useState(false);      // DUPR link / self-rate flow
+  const [changePwOpen,setChangePwOpen]=useState(false); // change-password modal, opened from Settings
   const [verified,setVerified]=useState(()=>kv.get('verified',false));
   const [pushOn,setPushOn]=useState(()=>pushPermGet()==='granted');
   const [onboardStep,setOnboardStep]=useState(0);
@@ -4872,6 +4998,14 @@ function App(){
     }).catch(()=>{ if(mounted)setAuthState('out'); });
     const {data:{subscription}}=sb.auth.onAuthStateChange(async(_evt,session)=>{
       if(!mounted)return;
+      if(_evt==='PASSWORD_RECOVERY'){
+        // Supabase authenticates the recovery link so updateUser() can be
+        // called, but that's to authorize a password change, not to log the
+        // user in. Hold here — the pwRecovery gate in the render below takes
+        // over regardless of what authState ends up as.
+        setPwRecovery(true);
+        return;
+      }
       try{
         if(session?.user){await loadProfile(session.user.id);if(mounted)setAuthState('in');}
         else{if(mounted){setMe(null);setAuthState('out');}}
@@ -5564,6 +5698,18 @@ function App(){
   const fullScreenModal=!!(legalKind||blockedOpen);
 
   // --- AUTH GATE ---
+  // Checked ahead of the normal states below: a recovery-link session can
+  // race with getSession()/loadProfile and briefly satisfy authState==='in',
+  // but pwRecovery must still win so the user is never dropped into the app
+  // without having set a new password.
+  if(pwRecovery){
+    return e('div',{className:'app-stage'},[
+      e('div',{className:'app-frame',style:{background:C.bg}},[e(SetNewPasswordScreen,{
+        onDone:()=>setPwRecovery(false),
+        onCancel:()=>{setPwRecovery(false);setMe(null);setAuthState('out');},
+      })]),
+    ]);
+  }
   if(authState==='loading'||authState==='in'&&!me){
     return e('div',{className:'app-stage'},[
       e('div',{className:'app-frame',style:{background:C.bg}},[e(LoadingScreen)]),
@@ -5610,6 +5756,7 @@ function App(){
             setMe(m=>m?{...m,...norm}:m);
             setSettings(st=>({...st,skill:norm.skill!=null?norm.skill:st.skill}));
           }}),
+        changePwOpen&&e(ChangePasswordModal,{key:'cpw',showToast,onClose:()=>setChangePwOpen(false)}),
         verifyOpen&&e(VerificationModal,{key:'vf',showToast,onClose:()=>setVerifyOpen(false),onVerified:async()=>{
           // profiles.verified is no longer writable by clients — the column is
           // revoked at the database and granted only through grant_verification(),
@@ -5627,7 +5774,7 @@ function App(){
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
-        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),onOpenDupr:()=>setDuprOpen(true),pushOn,showToast,
+        settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),onOpenDupr:()=>setDuprOpen(true),onOpenChangePassword:()=>setChangePwOpen(true),pushOn,showToast,
           onOpenLegal:(k)=>{track('legal_viewed',{kind:k});setLegalKind(k);},
           onOpenProhibited:()=>setProhibitedOpen(true),
           onOpenBlocked:()=>setBlockedOpen(true),
