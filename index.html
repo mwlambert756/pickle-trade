@@ -5309,6 +5309,11 @@ function App(){
       if(isF){
         const {error}=await sb.from('follows').delete().eq('follower_id',me.id).eq('following_id',userId);
         if(error){
+          // Surface the real reason in the console. The user-facing copy stays
+          // generic, but swallowing the error entirely (as this used to) meant
+          // a server-side RLS/permission fault looked identical to a dropped
+          // connection, with nothing anywhere to tell them apart.
+          console.error('Unfollow failed:',error);
           // Roll the optimistic flip back rather than leaving the button
           // showing a state the server never accepted.
           setFollowing(f=>f.includes(userId)?f:[...f,userId]);
@@ -5319,6 +5324,7 @@ function App(){
       }else{
         const {error}=await sb.from('follows').insert({follower_id:me.id,following_id:userId});
         if(error){
+          console.error('Follow failed:',error);
           setFollowing(f=>f.filter(x=>x!==userId));
           showError('Could not follow. Try again.');
           return;
