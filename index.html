@@ -3524,6 +3524,36 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
     .filter(a=>!lq||(a.u.name||'').toLowerCase().includes(lq)||(a.L.model||'').toLowerCase().includes(lq)||(a.L.brand||'').toLowerCase().includes(lq))
     .sort((a,b)=>AGO_ORDER.indexOf(a.ago)-AGO_ORDER.indexOf(b.ago));
 
+  // Find People: unlike the tabs above (which only ever look at people
+  // already in your network — followers, following, or 2nd-degree via the
+  // FOLLOW_GRAPH seed), this queries every profile in the app by name so you
+  // can follow someone you have no existing connection to. Debounced so it
+  // doesn't fire a query on every keystroke; merges in a client-side match
+  // against the demo seed users too, since real accounts and demo ones
+  // currently coexist.
+  const [peopleResults,setPeopleResults]=useState([]);
+  const [peopleSearching,setPeopleSearching]=useState(false);
+  useEffect(()=>{
+    if(sub!=='search'){return;}
+    const term=q.trim();
+    if(!term){setPeopleResults([]);setPeopleSearching(false);return;}
+    setPeopleSearching(true);
+    const t=setTimeout(async()=>{
+      let results=[];
+      try{
+        const {data,error}=await sb.from('profiles').select('*').ilike('name',`%${term}%`).limit(25);
+        if(!error&&data)results=data.map(profileToUser);
+      }catch(err){console.error('Find people search error:',err);}
+      const lt=term.toLowerCase();
+      const demoMatches=US.filter(u=>(u.name||'').toLowerCase().includes(lt));
+      const seen=new Set(results.map(u=>String(u.id)));
+      demoMatches.forEach(u=>{if(!seen.has(String(u.id))){results.push(u);seen.add(String(u.id));}});
+      setPeopleResults(results.filter(u=>u.id!==meId&&!isBlocked(u.id)));
+      setPeopleSearching(false);
+    },300);
+    return()=>clearTimeout(t);
+  },[q,sub,meId]);
+
   // "Suggested" is 2nd-degree from FOLLOW_GRAPH, which is hardcoded seed data
   // until the real `follows` table overwrites it — so early on it recommends
   // following people who don't exist.
@@ -3532,16 +3562,17 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
     ['following','Following',(following||[]).length],
     socialProofOn('followSuggestions')&&['suggested','Suggested',suggested.length],
     ['activity','Activity',activity.length],
+    ['search','Find People',null],
   ].filter(Boolean);
   const activeSub=TABS.some(([k])=>k===sub)?sub:'followers';
   const SUB={
     fontSize:11,fontWeight:700,cursor:'pointer',padding:'7px 10px',borderRadius:9,flexShrink:0,
   };
   return e('div',null,[
-    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${activeSub===k?C.pu:C.dm}`,background:activeSub===k?C.pu+'15':'transparent',color:activeSub===k?C.pu:C.mt}},`${l} ${n}`))),
+    e('div',{key:'sw',style:{display:'flex',gap:5,marginBottom:10,overflowX:'auto'}},TABS.map(([k,l,n])=>e('button',{key:k,onClick:()=>setSub(k),style:{...SUB,border:`1px solid ${activeSub===k?C.pu:C.dm}`,background:activeSub===k?C.pu+'15':'transparent',color:activeSub===k?C.pu:C.mt}},n==null?l:`${l} ${n}`))),
     e('div',{key:'srch',style:{position:'relative',marginBottom:11}},[
       e('span',{style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',display:'flex',color:C.mt}},[e(Ic,{n:'search',s:13})]),
-      e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:activeSub==='activity'?'Search activity...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
+      e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:activeSub==='activity'?'Search activity...':activeSub==='search'?'Search all members by name...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
     ]),
     activeSub==='followers'&&e(CommunityList,{key:'fl',users:(followers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No followers match your search':'No followers yet — make some sales to grow your network'}),
     activeSub==='following'&&e(CommunityList,{key:'fg',users:(followingUsers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No matches':"You're not following anyone yet. Follow sellers from their listings."}),
@@ -3550,6 +3581,11 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
       e(CommunityList,{key:'sl',users:suggested,following:following||[],onToggle,meId,followerSet,showVia:true,emptyMsg:(following||[]).length===0?'Follow a few sellers first — then we can suggest people you may know.':'No suggestions right now'}),
     ],
     activeSub==='activity'&&e(ActivityFeed,{key:'af',items:activity,onView,emptyMsg:(following||[]).length===0?'Follow sellers to see their latest listings here.':'No recent activity from people you follow'}),
+    activeSub==='search'&&[
+      !lq&&e('div',{key:'pr',style:{textAlign:'center',padding:'30px 14px',color:C.mt,fontSize:11,lineHeight:1.5}},'Search for anyone in the community by name to follow them — not just people already in your network.'),
+      lq&&peopleSearching&&e('div',{key:'ld',style:{textAlign:'center',padding:'30px 14px',color:C.mt,fontSize:11}},'Searching…'),
+      lq&&!peopleSearching&&e(CommunityList,{key:'pl',users:peopleResults,following:following||[],onToggle,meId,followerSet,emptyMsg:`No one found matching "${q.trim()}"`}),
+    ],
   ]);
 }
 
