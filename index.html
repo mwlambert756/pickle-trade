@@ -1303,6 +1303,7 @@ function timeAgo(ts){
 function profileToUser(p){
   return {
     id:p.id,name:p.name||'Player',ini:p.initials||'??',
+    avatar:p.avatar_url||null,
     rating:Number(p.rating)||0,rev:p.review_count||0,trust:p.trust_score||50,
     vfd:!!p.verified,loc:p.location||'Not set',dist:0,
     bdg:p.badges||[],since:p.created_at?new Date(p.created_at).getFullYear().toString():'',
@@ -3065,7 +3066,7 @@ function AddPaddleModal({mode,onClose,onAdd}){
   ]);
 }
 
-function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onOpenSeller,verified,onOpenVerify}){
+function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,savedMeta,followers,following,followingUsers,onToggleFollow,showToast,onCreate,onEditListing,onDeleteListing,onMarkSold,onRelist,onUpdateBio,onUpdateAvatar,onOpenSeller,verified,onOpenVerify}){
   const [tab,setTab]=useState('gear');
   const [gear,setGear]=useState([...GEAR]);
   const [wish,setWish]=useState([...WISH]);
@@ -3082,7 +3083,12 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
   const [showArchived,setShowArchived]=useState(false);
   const [editingBio,setEditingBio]=useState(false);
   const [editingWishBudget,setEditingWishBudget]=useState(null);
-  const [avatarUrl,setAvatarUrl]=useState(()=>kv.get('avatar',null));
+  // Local-only override so a freshly-picked photo shows instantly without
+  // waiting on the network round trip below. M.avatar (sourced from the
+  // database via `me`, now that loadProfile actually maps avatar_url) is the
+  // real cross-device value — this just bridges the gap while an upload is
+  // in flight, and gets cleared once the real URL is confirmed saved.
+  const [avatarOverride,setAvatarOverride]=useState(null);
   const [avatarBusy,setAvatarBusy]=useState(false);
   const avRef=useRef(null);
   const [analyticsFor,setAnalyticsFor]=useState(null);
@@ -3113,17 +3119,38 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
     try{
       const blob=await compressImage(f,512,.85);
       const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
-      setAvatarUrl(dataUrl);kv.set('avatar',dataUrl);
-      showToast&&showToast('Profile photo updated');
+      // Instant local preview only — NOT persisted anywhere. Previously this
+      // was cached to kv (device-local storage) and treated as if it were
+      // the saved photo, which is exactly what made it look "set" on this
+      // device while never actually reaching the account — so no other
+      // device ever saw it. The real save is the upload + profiles update
+      // below; this is just what's on screen until that confirms.
+      setAvatarOverride(dataUrl);
       if(me&&typeof me.id==='string'){
         const path=`${me.id}/avatar-${Date.now()}.jpg`;
         const {error:upErr}=await sb.storage.from('listing-photos').upload(path,blob,{contentType:'image/jpeg',upsert:true});
-        if(!upErr){
-          const {data:pub}=sb.storage.from('listing-photos').getPublicUrl(path);
-          if(pub&&pub.publicUrl){await sb.from('profiles').update({avatar_url:pub.publicUrl}).eq('id',me.id);}
-        }
+        if(upErr)throw upErr;
+        const {data:pub}=sb.storage.from('listing-photos').getPublicUrl(path);
+        if(!pub||!pub.publicUrl)throw new Error('Could not get a URL for the uploaded photo.');
+        const {error:updErr}=await sb.from('profiles').update({avatar_url:pub.publicUrl}).eq('id',me.id);
+        if(updErr)throw updErr;
+        // The account itself now has the new photo. Hand the real URL up so
+        // `me` carries it too, and drop the local override in favor of it —
+        // this device is now reading the exact value every other device will.
+        onUpdateAvatar&&onUpdateAvatar(pub.publicUrl);
+        setAvatarOverride(null);
+        showToast&&showToast('Profile photo updated');
+      } else {
+        // Demo/unauthenticated account — there's no account to save this to,
+        // so the local preview really is all there is. Say so rather than
+        // implying it's been saved anywhere.
+        showToast&&showToast('Preview updated (sign in to save a photo to your account)');
       }
-    }catch(err){showToast&&showToast('Could not process that image');}
+    }catch(err){
+      console.error('Avatar upload error:',err);
+      showToast&&showToast('Could not save your photo. Check your connection and try again.');
+      setAvatarOverride(null);
+    }
     setAvatarBusy(false);
   };
 
@@ -3271,7 +3298,7 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
       // Instagram-style: avatar + stats in one row
       e('div',{key:'igrow',style:{display:'flex',alignItems:'center',gap:18,marginBottom:12}},[
         e('div',{style:{position:'relative'}},[
-          e(Av,{u:{...M,avatar:avatarUrl||M.avatar},sz:76,edit:true,onEdit:pickAvatar}),
+          e(Av,{u:{...M,avatar:avatarOverride||M.avatar},sz:76,edit:true,onEdit:pickAvatar}),
           avatarBusy&&e('div',{style:{position:'absolute',inset:0,borderRadius:'50%',background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'#fff',fontWeight:800}},'…'),
           e('input',{ref:avRef,type:'file',accept:'image/*',onChange:onAvatarFile,style:{display:'none'}}),
         ]),
@@ -4982,6 +5009,7 @@ function App(){
       if(prof){
         const meObj={
           id:prof.id,name:prof.name||'Player',ini:prof.initials||'??',
+          avatar:prof.avatar_url||null,
           vfd:!!prof.verified,loc:prof.location||'—',skill:prof.skill||'—',
           since:prof.created_at?new Date(prof.created_at).getFullYear().toString():'—',
           resp:prof.response_time||'—',sales:prof.sales_count||0,bio:prof.bio||'',
@@ -5422,6 +5450,11 @@ function App(){
     const {error}=await sb.from('profiles').update({bio:safe}).eq('id',me.id);
     if(error){showError('Could not save bio. Try again.');throw error;}
   };
+  // ProfileTab does the storage upload + profiles.avatar_url write itself
+  // (it needs to show an instant local preview while that's in flight); this
+  // just keeps App's `me` in sync with the URL once that write is confirmed,
+  // so nothing else in the app is reading a stale value out of memory.
+  const handleUpdateAvatar=(url)=>{setMe(m=>m?{...m,avatar:url}:m);};
 
   // Fetch saved listings (DB) when me is loaded
   useEffect(()=>{
@@ -5837,7 +5870,7 @@ function App(){
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
           !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
-          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),onOpenDupr:()=>setDuprOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
+          !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),onOpenDupr:()=>setDuprOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onUpdateAvatar:handleUpdateAvatar,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
       !overlayOpen&&!view&&!fullScreenModal&&e('div',{key:'nv',style:{height:64,background:C.sf,borderTop:`1px solid ${C.dm}`,display:'flex',alignItems:'center',flexShrink:0}},TABS.map(t=>e('button',{key:t.id,onClick:()=>handleNav(t.id),style:{flex:1,height:'100%',background:'none',border:'none',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer',position:'relative'}},[
