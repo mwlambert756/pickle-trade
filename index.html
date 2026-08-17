@@ -1449,7 +1449,11 @@ function mapConversation(row,meId){
     id:row.id,wu,isM:!!row.is_match,unread,
     time:row.last_message_at?timeAgo(row.last_message_at):'—',
     last:lastTxt,dealStatus:row.deal_status||'browsing',
-    ref:list?{b:listEyebrow(list),m:listTitle(list),p:list.price==null?null:Number(list.price),id:list.id,isT:false}:{b:'—',m:'—'},
+    // A direct thread genuinely has no listing behind it, so ref is null
+    // rather than the old {b:'—',m:'—'} placeholder — every consumer now has
+    // to decide what to show instead of rendering two em-dashes.
+    isDirect:!!row.is_direct||!list,
+    ref:list?{b:listEyebrow(list),m:listTitle(list),p:list.price==null?null:Number(list.price),id:list.id,isT:false}:null,
     cv,
   };
 }
@@ -2888,7 +2892,55 @@ function PaymentSheet({onClose,onSend,amount,seller,showToast}){
   ]);
 }
 
-function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,showError,onOpenReview,onReport}){
+// Recipient picker for a new general-purpose thread. The eligible set is
+// people you follow plus people who follow you — see canDM in App. This is a
+// convenience filter only; the same rule is enforced in
+// get_or_create_direct_conversation, because anyone can call the RPC directly.
+function NewMessageModal({people,onClose,onPick,existingIds}){
+  const [q,setQ]=useState('');
+  const [busy,setBusy]=useState(null);
+  const lq=q.trim().toLowerCase();
+  const list=(people||[]).filter(u=>!lq||(u.name||'').toLowerCase().includes(lq)||(u.loc||'').toLowerCase().includes(lq));
+  const has=new Set((existingIds||[]).map(String));
+  return e('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,.45)',zIndex:40,display:'flex',alignItems:'flex-end'},onClick:onClose},[
+    e('div',{key:'sh',onClick:ev=>ev.stopPropagation(),style:{width:'100%',maxHeight:'82%',background:C.sf,borderRadius:'16px 16px 0 0',display:'flex',flexDirection:'column',overflow:'hidden'}},[
+      e('div',{key:'h',style:{padding:'13px 14px 10px',borderBottom:`1px solid ${C.dm}`}},[
+        e('div',{style:{display:'flex',alignItems:'center',gap:10}},[
+          e('span',{style:{flex:1,fontSize:14,fontWeight:900,color:C.tx}},'New message'),
+          e('button',{onClick:onClose,style:{background:'none',border:'none',color:C.mt,cursor:'pointer',fontSize:19,padding:0,lineHeight:1}},'\u00d7'),
+        ]),
+        e('div',{style:{fontSize:10,color:C.mt,marginTop:3,lineHeight:1.45}},'You can message people you follow, and people who follow you. To reach anyone else, message them from one of their listings.'),
+        e('div',{style:{position:'relative',marginTop:9}},[
+          e('span',{style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',display:'flex',color:C.mt}},[e(Ic,{n:'search',s:13})]),
+          e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Search your network...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
+        ]),
+      ]),
+      e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:'10px 12px 16px'}},
+        list.length===0
+          ? e('div',{style:{textAlign:'center',padding:'34px 16px',color:C.mt,fontSize:11,lineHeight:1.55}},
+              (people||[]).length===0
+                ? 'Follow someone — or get followed — and they\u2019ll show up here.'
+                : `No one in your network matches "${q.trim()}"`)
+          : e('div',{style:{display:'flex',flexDirection:'column',gap:7}},list.map(u=>e('button',{key:u.id,disabled:!!busy,
+              onClick:async()=>{setBusy(u.id);try{await onPick(u);}finally{setBusy(null);}},
+              style:{display:'flex',alignItems:'center',gap:9,width:'100%',textAlign:'left',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,padding:'9px 11px',cursor:busy?'default':'pointer',opacity:busy&&busy!==u.id?.5:1}},[
+              e(Av,{key:'a',u,sz:36}),
+              e('div',{key:'i',style:{flex:1,minWidth:0}},[
+                e('div',{style:{display:'flex',alignItems:'center',gap:4}},[
+                  e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),
+                  u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),
+                ]),
+                e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},has.has(String(u.id))?'Open existing conversation':(u.loc||'—')),
+              ]),
+              busy===u.id&&e('span',{key:'s',style:{fontSize:10,color:C.mt}},'\u2026'),
+            ]))),
+      ),
+    ]),
+  ]);
+}
+
+function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,showError,onOpenReview,onReport,dmPeople,onStartDirect}){
+  const [composeOpen,setComposeOpen]=useState(false);
   const [reply,setReply]=useState('');
   const [paySheet,setPaySheet]=useState(false);
   const [showConvMenu,setShowConvMenu]=useState(false);
@@ -3063,12 +3115,12 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,sh
       showSafety&&e(SafetyTipsModal,{key:'safety',onClose:()=>setShowSafety(false)}),
       counterFor&&e(CounterOfferModal,{key:'co',m:counterFor,onClose:()=>setCounterFor(null),onSubmit:sendCounter}),
       meetupOpen&&e(MeetupModal,{key:'mu',seller:th.wu,onClose:()=>setMeetupOpen(false),onConfirm:sendMeetup}),
-      disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref,amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:async({reason,detail})=>{
+      disputeOpen&&e(DisputeModal,{key:'dp',deal:{seller:th.wu,ref:th.ref||{b:'',m:'Direct message'},amount:lastAccept?.amount||0},onClose:()=>setDisputeOpen(false),onSubmit:async({reason,detail})=>{
         setDisputeOpen(false);
-        const r=await disputeSubmit({reporterId:meId,conversationId:th.id,listingRef:th.ref,amount:lastAccept?.amount||0,reason,detail});
+        const r=await disputeSubmit({reporterId:meId,conversationId:th.id,listingRef:th.ref||{b:'',m:'Direct message'},amount:lastAccept?.amount||0,reason,detail});
         showToast&&showToast(r.queued?'Dispute saved — it\'ll send as soon as you\'re back online':'Dispute filed — our team will follow up within 24h');
       }}),
-      e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.m)]),th.dealStatus==='accepted'&&e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'ACCEPTED')]),
+      th.ref&&e('div',{key:'ctx',style:{margin:'8px 12px',background:C.cd,borderRadius:10,padding:'7px 11px',display:'flex',alignItems:'center',gap:9,border:`1px solid ${th.dealStatus==='accepted'?C.ok+'40':C.bd}`}},[e(PSv,{col:C.lm+'50',sz:22}),e('div',{style:{flex:1}},[e('div',{style:{fontSize:9,color:C.lm,fontWeight:800}},th.ref.b),e('div',{style:{fontSize:11,fontWeight:700,color:C.tx}},th.ref.m)]),th.dealStatus==='accepted'&&e(IcTxt,{n:'check',s:10,style:{fontSize:9,color:C.ok,fontWeight:700,background:C.ok+'20',padding:'3px 7px',borderRadius:6}},'ACCEPTED')]),
       e('div',{key:'msgs',style:{flex:1,overflowY:'auto',padding:'7px 12px',display:'flex',flexDirection:'column',gap:7}},[
         ...th.cv.map((m,i)=>e(MsgCard,{key:i,m,onAccept:acceptOffer,onDecline:declineOffer,onCounter:setCounterFor,onRetry:retrySend})),
         theyTyping&&e('div',{key:'typ',style:{display:'flex',justifyContent:'flex-start'}},[e('div',{style:{padding:'8px 13px',borderRadius:13,borderBottomLeftRadius:2,background:C.cd,display:'flex',gap:3,alignItems:'center'}},[
@@ -3079,7 +3131,7 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,sh
         e('div',{key:'end',ref:endR}),
       ]),
       th.dealStatus==='accepted'&&th.cv.some(c=>c.kind==='payment')&&e('div',{key:'cmpl',style:{padding:'8px 12px',background:C.ok+'10',borderTop:`1px solid ${C.ok}30`}},[
-        e('button',{onClick:()=>{onOpenReview&&onOpenReview(th.ref,th.wu);},style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.ok,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},[e(Ic,{key:'i',n:'check',s:14,sw:2.5}),'Mark deal complete & leave review']),
+        e('button',{onClick:()=>{onOpenReview&&onOpenReview(th.ref||{b:'',m:'Direct message'},th.wu);},style:{width:'100%',padding:'11px 0',borderRadius:11,background:C.ok,border:'none',cursor:'pointer',fontSize:12,fontWeight:800,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},[e(Ic,{key:'i',n:'check',s:14,sw:2.5}),'Mark deal complete & leave review']),
       ]),
       showMeetup&&e('div',{key:'meet',style:{padding:'8px 12px',background:C.tl+'10',borderTop:`1px solid ${C.tl}30`}},[
         e('div',{style:{fontSize:9,color:C.mt,marginBottom:6,textAlign:'center'}},'Agree on a meet-up before sending payment'),
@@ -3096,14 +3148,25 @@ function MsgTab({msgs,setMsgs,activeIdx,setActiveIdx,meId,onRefresh,showToast,sh
     ]);
   }
   return e('div',{style:{flex:1,overflowY:'auto'}},[
-    e('div',{key:'h',style:{padding:'12px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`}},[e('div',{style:{fontSize:18,fontWeight:900,color:C.tx}},'Messages'),e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${msgs.filter(m=>m.unread>0).length} unread · ${msgs.length} conversations`)]),
+    e('div',{key:'h',style:{padding:'12px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[
+      e('div',{key:'t',style:{flex:1,minWidth:0}},[
+        e('div',{style:{fontSize:18,fontWeight:900,color:C.tx}},'Messages'),
+        e('div',{style:{fontSize:11,color:C.mt,marginTop:2}},`${msgs.filter(m=>m.unread>0).length} unread · ${msgs.length} conversations`),
+      ]),
+      onStartDirect&&e('button',{key:'n','aria-label':'New message',onClick:()=>{haptic();setComposeOpen(true);},
+        style:{flexShrink:0,width:34,height:34,borderRadius:'50%',background:C.lm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',boxShadow:'var(--sh-1)'}},
+        [e(Ic,{n:'plus',s:17,sw:2.5})]),
+    ]),
+    composeOpen&&e(NewMessageModal,{key:'nm',people:dmPeople||[],existingIds:msgs.map(m=>m.wu&&m.wu.id),
+      onClose:()=>setComposeOpen(false),
+      onPick:async(u)=>{const ok=await onStartDirect(u);if(ok!==false)setComposeOpen(false);}}),
     msgs.length===0?e('div',{key:'em',style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'60px 20px',gap:10}},[
       e(Ic,{n:'message',s:42,c:C.mt+'70',sw:1.25}),
       e('div',{style:{fontSize:14,fontWeight:800,color:C.tx}},'No conversations yet'),
-      e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5}},'Reach out to a seller on any listing to start a conversation.'),
+      e('div',{style:{fontSize:11,color:C.mt,textAlign:'center',maxWidth:240,lineHeight:1.5}},'Reach out to a seller on any listing, or tap + to message someone in your network.'),
     ]):e('div',{key:'l',className:'stagger'},msgs.map((th,idx)=>e('div',{key:th.id,onClick:()=>setActiveIdx(idx),'data-press':'1',style:{padding:'11px 14px',borderBottom:`1px solid ${C.dm}`,cursor:'pointer',display:'flex',gap:10,background:th.unread>0?C.lm+'08':'transparent'}},[
       e('div',{style:{position:'relative'}},[e(Av,{u:th.wu,sz:42}),th.unread>0&&e('div',{style:{position:'absolute',top:-2,right:-2,width:14,height:14,background:C.lm,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:900,color:'#fff'}},th.unread),null]),
-      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.ok:C.lm,fontWeight:700,marginBottom:2,display:'flex',alignItems:'center',gap:4}},[th.dealStatus==='accepted'&&e('span',{style:{background:C.ok+'18',color:C.ok,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'DEAL'),e('span',{style:{color:C.mt,fontWeight:500}},`${th.ref.b} ${th.ref.m}`)]),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},th.last)]),
+      e('div',{style:{flex:1,minWidth:0}},[e('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:2}},[e('span',{style:{fontSize:13,fontWeight:th.unread>0?700:500,color:C.tx}},th.wu.name),e('span',{style:{fontSize:10,color:C.mt}},th.time)]),e('div',{style:{fontSize:9,color:th.dealStatus==='accepted'?C.ok:C.lm,fontWeight:700,marginBottom:2,display:'flex',alignItems:'center',gap:4}},[th.dealStatus==='accepted'&&e('span',{style:{background:C.ok+'18',color:C.ok,borderRadius:8,padding:'1px 6px',fontSize:9,fontWeight:800}},'DEAL'),e('span',{style:{color:C.mt,fontWeight:500}},th.ref?`${th.ref.b} ${th.ref.m}`:'Direct message')]),e('div',{style:{fontSize:11,color:th.unread>0?C.tx:C.mt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},th.last)]),
     ]))),
   ]);
 }
@@ -4521,19 +4584,23 @@ function ReviewsBlock({sid,compact}){
 }
 
 // --- Full seller profile view (opened from a listing's seller card) ---
-function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showToast,onOpenUser}){
+function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showToast,onOpenUser,onMessage,canMessage}){
   const listings=LS.filter(l=>l.sid===u.id);
   const avg=reviewAvg(u.id)||u.rating||0;
   // This user's own network. Loaded per-profile rather than derived from the
   // signed-in account's lists, which only ever described *my* follows.
-  const [net,setNet]=useState(null);          // null = still loading
+  // Collapsed by default and fetched on first expand — no reason to spend two
+  // queries on every profile open when most visits are about the listings.
+  const [netOpen,setNetOpen]=useState(false);
+  const [net,setNet]=useState(null);          // null = not loaded yet
   const [netSub,setNetSub]=useState('followers');
+  useEffect(()=>{setNetOpen(false);setNet(null);setNetSub('followers');},[u.id]);
   useEffect(()=>{
+    if(!netOpen||net!==null)return;
     let alive=true;
-    setNet(null);setNetSub('followers');
     loadFollowsFor(u.id).then(r=>{if(alive)setNet(r);});
     return()=>{alive=false;};
-  },[u.id]);
+  },[netOpen,net,u.id]);
   const followerSet=null; // CommunityList uses this for a "Follows you" badge —
   // it describes the *viewer's* followers, and we only have the seller's here.
   // Passing the seller's list would label their followers as following you.
@@ -4563,20 +4630,35 @@ function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showTo
           e('div',{style:{fontSize:10,color:C.mt,marginTop:3,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},[e(IcTxt,{key:'a',n:'pin',s:10},u.loc||'—'),e(IcTxt,{key:'b',n:'bolt',s:10},u.resp||'—'),e(DuprChip,{key:'c',u,sz:'sm'})]),
         ]),
       ]),
-      u.id!==meId&&e('div',{key:'fb',style:{marginBottom:14}},[e(FollowBtn,{userId:u.id,following:following||[],onToggle:onToggleFollow||(()=>{}),sz:'lg'})]),
+      u.id!==meId&&e('div',{key:'fb',style:{marginBottom:14,display:'flex',gap:8,alignItems:'stretch'}},[
+        e('div',{key:'f',style:{flex:1}},[e(FollowBtn,{userId:u.id,following:following||[],onToggle:onToggleFollow||(()=>{}),sz:'lg'})]),
+        // Only shown once there's a follow edge in one direction. Rendering it
+        // greyed-out for everyone would advertise a door that's locked; the
+        // Follow button sitting next to it is the actual instruction.
+        onMessage&&canMessage&&e('button',{key:'m',onClick:()=>{haptic();onMessage(u);},
+          style:{flex:1,borderRadius:11,background:C.cd,border:`1px solid ${C.bd}`,color:C.tx,fontSize:12,fontWeight:800,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},
+          [e(Ic,{key:'i',n:'message',s:14,sw:2}),'Message']),
+      ]),
       u.bdg&&u.bdg.length>0&&e('div',{key:'bd',style:{display:'flex',gap:5,flexWrap:'wrap',marginBottom:14}},u.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'15',borderRadius:8,padding:'3px 8px',border:`1px solid ${C.tl}25`}},b))),
       e('div',{key:'rv',style:{marginBottom:16}},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'REVIEWS'),e(ReviewsBlock,{sid:u.id})]),
       e('div',{key:'net',style:{marginBottom:16}},[
-        e('div',{key:'t',style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'NETWORK'),
-        e('div',{key:'tabs',style:{display:'flex',gap:5,marginBottom:9}},netTabs.map(([k,l,n])=>e('button',{key:k,onClick:()=>setNetSub(k),
-          style:{fontSize:11,fontWeight:700,cursor:'pointer',padding:'6px 11px',borderRadius:9,flexShrink:0,
-            border:`1px solid ${netSub===k?C.pu:C.dm}`,background:netSub===k?C.pu+'15':'transparent',color:netSub===k?C.pu:C.mt}},
-          n==null?l:`${l} ${n}`))),
-        net===null
-          ? e('div',{key:'ld',style:{fontSize:11,color:C.mt,padding:'14px 0',textAlign:'center'}},'Loading…')
-          : e(CommunityList,{key:'nl',users:netList,following:following||[],onToggle:onToggleFollow||(()=>{}),meId,followerSet,
-              onOpenUser:onOpenUser?(other)=>{if(String(other.id)!==String(u.id))onOpenUser(other);}:null,
-              emptyMsg:netSub==='followers'?`Nobody follows ${u.name.split(' ')[0]} yet`:`${u.name.split(' ')[0]} isn't following anyone yet`}),
+        e('button',{key:'hd','aria-expanded':netOpen,onClick:()=>{haptic();setNetOpen(o=>!o);},
+          style:{width:'100%',display:'flex',alignItems:'center',gap:8,background:C.cd,border:`1px solid ${C.bd}`,borderRadius:11,padding:'10px 12px',cursor:'pointer',textAlign:'left'}},[
+          e(Ic,{key:'i',n:'users',s:13,c:C.mt}),
+          e('span',{key:'l',style:{flex:1,fontSize:11,fontWeight:800,color:C.tx}},'Followers & following'),
+          e('span',{key:'c',style:{color:C.mt,transform:netOpen?'rotate(90deg)':'none',transition:'transform .18s',display:'flex'}},[e(Ic,{n:'chevron',s:13})]),
+        ]),
+        netOpen&&e('div',{key:'bd',style:{marginTop:9}},[
+          e('div',{key:'tabs',style:{display:'flex',gap:5,marginBottom:9}},netTabs.map(([k,l,n])=>e('button',{key:k,onClick:()=>setNetSub(k),
+            style:{fontSize:11,fontWeight:700,cursor:'pointer',padding:'6px 11px',borderRadius:9,flexShrink:0,
+              border:`1px solid ${netSub===k?C.pu:C.dm}`,background:netSub===k?C.pu+'15':'transparent',color:netSub===k?C.pu:C.mt}},
+            n==null?l:`${l} ${n}`))),
+          net===null
+            ? e('div',{key:'ld',style:{fontSize:11,color:C.mt,padding:'14px 0',textAlign:'center'}},'Loading…')
+            : e(CommunityList,{key:'nl',users:netList,following:following||[],onToggle:onToggleFollow||(()=>{}),meId,followerSet,
+                onOpenUser:onOpenUser?(other)=>{if(String(other.id)!==String(u.id))onOpenUser(other);}:null,
+                emptyMsg:netSub==='followers'?`Nobody follows ${u.name.split(' ')[0]} yet`:`${u.name.split(' ')[0]} isn't following anyone yet`}),
+        ]),
       ]),
       e('div',{key:'ls'},[
         e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},`LISTINGS · ${listings.length}`),
@@ -5962,6 +6044,64 @@ function App(){
   // left activeMsgIdx pointing at whatever was there before (often nothing, and
   // sometimes an unrelated conversation). Buy Now and Make Offer both call
   // get_or_create_conversation; this now does the same.
+  // --- Direct (listing-less) messaging ---------------------------------
+  // Eligible = people you follow, plus people who follow you. Following is one
+  // tap, so this isn't real friction for "I want to ask this seller something"
+  // — but it does stop a stranger cold-messaging you the moment they find your
+  // profile, which the 120/hr rate limit doesn't address (that caps bursts from
+  // one account, not a single unwanted message).
+  //
+  // Mutual-follow-only was the other option and would have been worse: it
+  // breaks reaching out to someone you found via search, which is probably how
+  // most new threads start.
+  const canDM=useCallback((uid)=>{
+    if(uid==null||!me?.id||String(uid)===String(me.id))return false;
+    if(isBlocked(uid))return false;
+    return (following||[]).some(f=>String(f)===String(uid))
+        || (followers||[]).some(f=>String(f.id)===String(uid));
+  },[me,following,followers]);
+
+  const dmPeople=React.useMemo(()=>{
+    const out=[],seen=new Set();
+    [...(followingUsers||[]),...(followers||[])].forEach(u=>{
+      if(!u||u.id==null)return;
+      const k=String(u.id);
+      if(seen.has(k)||isBlocked(u.id)||k===String(me?.id))return;
+      seen.add(k);out.push(u);
+    });
+    return out.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  },[followingUsers,followers,me]);
+
+  // Opens (or reopens) a general thread with someone. Returns false if it
+  // couldn't, so the picker can stay open and show the error in context.
+  const startDirectThread=async(u)=>{
+    if(!u||u.id==null)return false;
+    if(!canDM(u.id)){showError('You can only message people you follow, or who follow you.');return false;}
+    const existing=msgs.findIndex(m=>m.wu&&String(m.wu.id)===String(u.id));
+    if(existing>=0){setActiveMsgIdx(existing);setTab('messages');setView(null);return true;}
+    // Demo users have integer ids and no row to hang a conversation off.
+    if(!isUuid(u.id)||!me?.id){
+      const thread={id:Date.now(),wu:u,ref:null,isDirect:true,isM:false,unread:0,time:'Now',dealStatus:'browsing',last:'',cv:[]};
+      setMsgs(ms=>[thread,...ms]);setActiveMsgIdx(0);setTab('messages');setView(null);return true;
+    }
+    const {data:convId,error}=await sb.rpc('get_or_create_direct_conversation',{p_other_user_id:u.id});
+    if(error){
+      console.error('direct conv',error);
+      // 42501 is the follow/block check firing server-side — surface the
+      // reason rather than a generic failure, since it's actionable.
+      showError(/42501|follow/i.test(error.message||'')
+        ? 'You need to follow each other to start this conversation.'
+        : 'Could not start that conversation. Check your connection and try again.');
+      return false;
+    }
+    const threads=await fetchConversations();
+    setTab('messages');setView(null);
+    const i=(threads||[]).findIndex(t=>t.id===convId);
+    setActiveMsgIdx(i>=0?i:0);
+    track('direct_thread_started',{});
+    return true;
+  };
+
   const goMsg=async(L)=>{
     if(!L)return;
     const existing=msgs.findIndex(m=>m.wu&&String(m.wu.id)===String(L.sid));
@@ -6144,7 +6284,7 @@ function App(){
           setMe(m=>m?{...m,vfd:true}:m);
           showToast('Phone confirmed \u2014 seller verification is pending review');
         }}),
-        sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenUser:(other)=>openPanel('seller',other)}),
+        sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenUser:(other)=>openPanel('seller',other),onMessage:startDirectThread,canMessage:canDM(sellerView.id)}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
@@ -6173,7 +6313,7 @@ function App(){
           view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:savedStatusFor(view,savedMeta&&savedMeta[view.id]).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
           !view&&tab==='market'&&e(MarketTab,{key:'mk',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,cat:marketCat,setCat:setMarketCat,filters:marketFilters,setFilters:setMarketFilters,onLoadMore:loadMoreListings,hasMore:hasMoreListings,showToast}),
-          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget}),
+          !view&&tab==='messages'&&e(MsgTab,{key:'ms',msgs,setMsgs,activeIdx:activeMsgIdx,setActiveIdx:setActiveMsgIdx,meId:me?.id,onRefresh:fetchConversations,showToast,showError,onOpenReview:(L,seller)=>setReviewFor({L,seller}),onReport:setReportTarget,dmPeople,onStartDirect:startDirectThread}),
           !view&&tab==='profile'&&e(ProfileTab,{key:'pf',onView:viewListing,saved,onOpenSaved:()=>openPanel('saved'),onOpenSettings:()=>openPanel('settings'),onOpenDupr:()=>setDuprOpen(true),me,savedMeta,followers,following,followingUsers,onToggleFollow:toggleFollow,showToast,onCreate:()=>openPanel('create'),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onRelist:handleRelist,onUpdateBio:handleUpdateBio,onUpdateAvatar:handleUpdateAvatar,onOpenSeller:(u)=>openPanel('seller',u),verified,onOpenVerify:()=>setVerifyOpen(true)}),
         ],
       ]),
