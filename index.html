@@ -193,7 +193,15 @@ const applyTheme=(mode)=>{
   // how rules like :focus-visible stay in sync with the active theme.
   try{const r=document.documentElement;Object.keys(src).forEach(k=>{r.style.setProperty('--'+k,src[k]);});}catch(err){}
 };
-applyTheme('light');
+// Read the stored theme synchronously, before React's first render, so a
+// dark-mode user doesn't get a white flash while the useEffect that used to
+// own this waits for the first paint to finish. `kv` isn't defined yet at this
+// point in the file, so this reads the same key straight out of the store.
+(function bootTheme(){
+  let mode='light';
+  try{const raw=_store.getItem('dink:themeMode');if(raw)mode=JSON.parse(raw);}catch(err){}
+  applyTheme(mode==='dark'?'dark':'light');
+})();
 const e=React.createElement;
 
 // --- PERSISTENT KV (uses same fallback as supabase auth) ---
@@ -292,6 +300,7 @@ function pushNotify(title,body,opts={}){
 // could ever arrive, which is worse than not offering it.
 const PUSH={
   vapidPublicKey:'',   // paste the VAPID public key here to enable Web Push
+  swPath:'sw.js',      // must be deployed alongside index.html before push works
   swReady:false,
   registration:null,
   get enabled(){return this.swReady&&!!this.vapidPublicKey;},
@@ -300,7 +309,12 @@ async function registerSW(){
   try{
     if(!('serviceWorker'in navigator))return null;
     if(location.protocol!=='https:'&&location.hostname!=='localhost')return null;
-    const reg=await navigator.serviceWorker.register('sw.js');
+    // sw.js isn't in the build yet, and neither is a VAPID key — without one
+    // push can't work even if the worker registered. Attempting it anyway threw
+    // a 404 into the console on every single page load. Ship sw.js, paste the
+    // key into PUSH.vapidPublicKey, and this starts registering on its own.
+    if(!PUSH.vapidPublicKey)return null;
+    const reg=await navigator.serviceWorker.register(PUSH.swPath);
     PUSH.swReady=true;PUSH.registration=reg;
     return reg;
   }catch(err){
@@ -871,6 +885,7 @@ const ANALYTICS={
   enabled:true,
   flushEvery:15000,
   maxBatch:25,
+  _timer:null,
 };
 let _evQueue=[];
 let _sessionId=null;
@@ -912,7 +927,9 @@ function initErrorReporting(){
       const r=ev&&ev.reason;
       track('js_rejection',{message:String((r&&r.message)||r||'').slice(0,300)});
     });
-    setInterval(flushEvents,ANALYTICS.flushEvery);
+    // Guard against a second interval if this ever runs twice (StrictMode
+    // double-invokes effects in development).
+    if(!ANALYTICS._timer)ANALYTICS._timer=setInterval(flushEvents,ANALYTICS.flushEvery);
     window.addEventListener('pagehide',()=>{flushEvents();});
   }catch{}
 }
@@ -1224,6 +1241,19 @@ let SOLD=[
 {id:'s3',brand:'JOOLA',model:'Hyperion CFS 16',price:130,orig:220,dist:1.2,ago:'1d',loc:'Maryville'},
 {id:'s4',brand:'Paddletek',model:'Tempest Wave',price:75,orig:150,dist:2.1,ago:'2d',loc:'Alcoa'},
 ];
+
+// SOLD above is a display-only summary for the "recently sold nearby" strip —
+// it drops photos, description and specs, and keeps only the 8 newest rows.
+// MY_SOLD keeps the full mapped listing objects so a seller's own sale history
+// stays inspectable (Relist reads the description and category off these).
+let MY_SOLD=[];
+
+// True when the listings table came back empty and the whole app is running on
+// seeded sample data. Every other fetch consults this before deciding whether
+// an empty result means "keep the demo" or "this account genuinely has none".
+// It's a module-level flag rather than React state because the fetches need to
+// read it from inside async callbacks that closed over an older render.
+let DEMO_MODE=false;
 
 // Demo fallback ONLY — keyed to the seeded integer listing ids. Real listings
 // carry UUID ids and never match here, so they always fall through to
@@ -3272,10 +3302,33 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
     }
   };
 
-  const MY_LS=[
+  // This used to be a hardcoded two-paddle array, which meant a real seller's
+  // own listings never appeared here at all — they'd post something, watch it
+  // show up in Market, then open their profile and see two paddles belonging to
+  // nobody. Worse, every action on this list (edit, mark sold, bulk price,
+  // delete) short-circuits on `typeof L.id!=='string'`, so with integer demo
+  // ids all of them silently no-oped while the local override still repainted
+  // the row as if the write had landed.
+  //
+  // Now it's derived from the real data: active listings out of LS, sold ones
+  // out of MY_SOLD, both filtered to this user. The demo array only comes back
+  // when the whole app is in sample-data mode.
+  const myId=me&&me.id;
+  const DEMO_MY_LS=[
     {id:901,cat:'paddle',brand:'Head',model:'Radical Elite',price:60,orig:100,cond:7,sid:0,type:'sale',dist:0,saves:3,views:28,ago:'1w',loc:'Maryville',desc:'Great starter/backup.',grip:'4 1/4"',active:true},
     {id:902,cat:'paddle',brand:'Onix',model:'Z5 Graphite',price:45,orig:80,cond:6,sid:0,type:'sale',dist:0,saves:2,views:19,ago:'2w',loc:'Maryville',desc:'Old trusty.',grip:'4 1/4"',active:false,soldPrice:42,soldDate:'5d ago',soldTo:'Marcus W.'},
   ];
+  const MY_LS=DEMO_MODE||myId==null
+    ? DEMO_MY_LS.map(l=>({...l}))
+    : [
+        ...LS.filter(l=>String(l.sid)===String(myId)).map(l=>({...l,active:true})),
+        ...MY_SOLD.filter(l=>String(l.sid)===String(myId)).map(l=>({
+          ...l,active:false,
+          soldPrice:l.sold_price!=null?Number(l.sold_price):l.price,
+          soldDate:l.sold_at?timeAgo(l.sold_at):(l.ago||'recently'),
+          soldTo:l.sold_to||'a buyer',
+        })),
+      ];
   MY_LS.forEach(l=>{const d=pdbFind(l.brand,l.model);if(d)Object.assign(l,d);const ov=localOverrides[l.id];if(ov)Object.assign(l,ov);if(ov&&ov.sold)l.active=false;});
   const activeCt=MY_LS.filter(l=>l.active).length;
   const savedCt=saved.length;
@@ -3625,7 +3678,10 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
   const BRANDS=[...PADDLE_BRANDS,'Other'];
   const CONDS=['Brand New','Like New','Good','Fair','Heavy Use'];
   const IS={width:'100%',padding:'9px 11px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:12,outline:'none'};
-  const LS={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
+  // Named LBL, not LS — LS is the module-level listings array, and calling this
+  // one LS shadowed it for the whole component. Harmless only for as long as
+  // nothing in here needed to read a listing.
+  const LBL={fontSize:9,color:C.mt,marginBottom:5,display:'block',fontWeight:700};
   // Gear has no brand field, so requiring one would make the post button dead.
   const valid=(f.cat!=='paddle'||f.brand)&&f.model&&f.price&&f.desc&&photos.length>0;
   const pdata=f.cat==='paddle'?pdbFind(f.brand,f.model):null;
@@ -3705,11 +3761,11 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
   return e('div',{style:{position:'absolute',inset:0,background:C.bg,display:'flex',flexDirection:'column',zIndex:25}},[
     e('div',{key:'h',style:{padding:'11px 14px',background:C.sf,borderBottom:`1px solid ${C.dm}`,display:'flex',alignItems:'center',gap:10}},[e('button',{onClick:onClose,'aria-label':'Close',style:{background:'none',border:'none',color:C.tx,cursor:'pointer',display:'flex',padding:0}},[e(Ic,{n:'close',s:18,sw:2})]),e('div',{style:{flex:1}},[e('div',{style:{fontSize:15,fontWeight:800,color:C.tx}},'List Your Item'),e(IcTxt,{n:'pin',s:10,style:{fontSize:9,color:C.lm,marginTop:1}},'Maryville · 25mi visibility')])]),
     e('div',{key:'b',style:{flex:1,overflowY:'auto',padding:14,display:'flex',flexDirection:'column',gap:13}},[
-      e('div',null,[e('label',{style:LS},'CATEGORY'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},CATS2.map(cc=>e('button',{key:cc.k,onClick:()=>up('cat',cc.k),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.cat===cc.k?C.lm:C.bd}`,background:f.cat===cc.k?C.lm+'20':C.cd,color:f.cat===cc.k?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:cc.ic,s:14}),cc.l])))]),
-      f.cat==='gear'&&e('div',null,[e('label',{style:LS},'GEAR TYPE'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},GEAR_SUBS.map(gs=>e('button',{key:gs,onClick:()=>up('sub',gs),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.sub===gs?C.lm:C.bd}`,background:f.sub===gs?C.lm+'20':C.cd,color:f.sub===gs?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:GEAR_SUB_ICON[gs],s:14}),gs])))]),
+      e('div',null,[e('label',{style:LBL},'CATEGORY'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},CATS2.map(cc=>e('button',{key:cc.k,onClick:()=>up('cat',cc.k),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.cat===cc.k?C.lm:C.bd}`,background:f.cat===cc.k?C.lm+'20':C.cd,color:f.cat===cc.k?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:cc.ic,s:14}),cc.l])))]),
+      f.cat==='gear'&&e('div',null,[e('label',{style:LBL},'GEAR TYPE'),e('div',{style:{display:'flex',gap:6,overflowX:'auto'}},GEAR_SUBS.map(gs=>e('button',{key:gs,onClick:()=>up('sub',gs),style:{padding:'7px 13px',borderRadius:10,border:`1px solid ${f.sub===gs?C.lm:C.bd}`,background:f.sub===gs?C.lm+'20':C.cd,color:f.sub===gs?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:6}},[e(Ic,{key:'i',n:GEAR_SUB_ICON[gs],s:14}),gs])))]),
       e('div',null,[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
-          e('label',{style:{...LS,marginBottom:0}},`PHOTOS · ${photos.length}/6 ${photos.length===0?'(required)':''}`),
+          e('label',{style:{...LBL,marginBottom:0}},`PHOTOS · ${photos.length}/6 ${photos.length===0?'(required)':''}`),
           photos.length===0&&e(IcTxt,{n:'camera',s:10,style:{fontSize:9,color:C.mt}},'Natural light, full item in frame'),
         ]),
         e('input',{type:'file',accept:'image/*',multiple:true,ref:fileRef,onChange:onFile,style:{display:'none'}}),
@@ -3733,17 +3789,17 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
       // or mixed item ("3 used balls + a grip"). One free-text line inside the
       // chosen gear type is all gear needs.
       f.cat==='paddle'&&e('div',{key:'brand'},[
-        e('label',{style:LS},'BRAND'),
+        e('label',{style:LBL},'BRAND'),
         e('input',{value:f.brand,onChange:ev=>up('brand',ev.target.value),placeholder:'Start typing \u2014 or enter any brand',list:'brand-opts',style:IS}),
         e('datalist',{id:'brand-opts'},BRANDS.map(b=>e('option',{key:b,value:b}))),
       ]),
       f.cat==='paddle'?e('div',{key:'model'},[
-        e('label',{style:LS},'PADDLE MODEL'),
+        e('label',{style:LBL},'PADDLE MODEL'),
         e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),placeholder:'Start typing — we\'ll match our paddle database',list:modelOpts.length?'pdb-models':undefined,style:IS}),
         modelOpts.length>0&&e('datalist',{id:'pdb-models'},modelOpts.map(m=>e('option',{key:m,value:m}))),
         f.model&&!pdata&&e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'Not in our paddle database yet — your listing still posts, specs just won\'t auto-fill.'),
       ]):e('div',{key:'item'},[
-        e('label',{style:LS},'WHAT ARE YOU SELLING?'),
+        e('label',{style:LBL},'WHAT ARE YOU SELLING?'),
         e('input',{value:f.model,onChange:ev=>up('model',ev.target.value),maxLength:80,placeholder:GEAR_PLACEHOLDER[f.sub]||'Describe the item',style:IS}),
         e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},`Buyers see this as the listing title, under ${f.sub}. Include brand, size, or colour if it helps — whatever describes it best.`),
       ]),
@@ -3770,32 +3826,32 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
             :'Optional \u2014 anything you add is saved so the next seller of this paddle doesn\u2019t have to look it up.'),
         e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7}},[
           e('div',{key:'sh'},[
-            e('label',{style:LS},'SHAPE'),
+            e('label',{style:LBL},'SHAPE'),
             e('select',{value:f.specShape||'',onChange:ev=>up('specShape',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...PADDLE_SHAPES.map(x=>e('option',{key:x,value:x},x))]),
           ]),
           e('div',{key:'th'},[
-            e('label',{style:LS},'THICKNESS'),
+            e('label',{style:LBL},'THICKNESS'),
             e('select',{value:f.specThickness||'',onChange:ev=>up('specThickness',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...THICKNESSES.map(x=>e('option',{key:x,value:x},x))]),
           ]),
           e('div',{key:'cm',style:{gridColumn:'1 / -1'}},[
-            e('label',{style:LS},'CORE MATERIAL'),
+            e('label',{style:LBL},'CORE MATERIAL'),
             e('select',{value:f.specCore||'',onChange:ev=>up('specCore',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...CORE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
           ]),
           e('div',{key:'fc',style:{gridColumn:'1 / -1'}},[
-            e('label',{style:LS},'FACE MATERIAL'),
+            e('label',{style:LBL},'FACE MATERIAL'),
             e('select',{value:f.specFace||'',onChange:ev=>up('specFace',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...FACE_MATERIALS.map(x=>e('option',{key:x,value:x},x))]),
           ]),
           e('div',{key:'gc'},[
-            e('label',{style:LS},'GRIP CIRCUMFERENCE'),
+            e('label',{style:LBL},'GRIP CIRCUMFERENCE'),
             e('select',{value:f.specGrip||'',onChange:ev=>up('specGrip',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...GRIP_CIRCUMFERENCES.map(x=>e('option',{key:x.v,value:x.v.toFixed(3)},x.label))]),
           ]),
           e('div',{key:'hl'},[
-            e('label',{style:LS},'HANDLE LENGTH'),
+            e('label',{style:LBL},'HANDLE LENGTH'),
             e('select',{value:f.specHandle||'',onChange:ev=>up('specHandle',ev.target.value),style:IS},
               [e('option',{key:'_',value:''},'\u2014'),...HANDLE_LENGTHS.map(x=>e('option',{key:x.v,value:x.v.toFixed(2)},x.label))]),
           ]),
@@ -3815,7 +3871,7 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
       // lead tape, and manufacturing tolerance all move it, and the buyer
       // is receiving this specific paddle.
       f.cat==='paddle'&&e('div',{key:'mw'},[
-        e('label',{style:LS},'MEASURED WEIGHT \u2014 OPTIONAL'),
+        e('label',{style:LBL},'MEASURED WEIGHT \u2014 OPTIONAL'),
         e('div',{style:{position:'relative'}},[
           e('input',{value:f.weightOz||'',onChange:ev=>up('weightOz',ev.target.value),type:'number',step:'0.1',min:'3',max:'17',placeholder:'e.g. 8.1',style:{...IS,paddingRight:34}}),
           e('span',{style:{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',color:C.mt,fontSize:11,fontWeight:700}},'oz'),
@@ -3829,7 +3885,7 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
           return e('div',{style:{fontSize:9,color:C.mt,marginTop:4,lineHeight:1.4}},'A kitchen scale works. Buyers trust listings with a real measured weight \u2014 and yours may differ from the factory spec if it has an overgrip or lead tape.');
         })(),
       ]),
-      e('div',null,[e('label',{style:LS},'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:f.price,onChange:ev=>up('price',ev.target.value),type:'number',placeholder:'0',style:{...IS,paddingLeft:24}})])]),
+      e('div',null,[e('label',{style:LBL},'PRICE'),e('div',{style:{position:'relative'}},[e('span',{style:{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.lm,fontWeight:800,fontSize:14}},'$'),e('input',{value:f.price,onChange:ev=>up('price',ev.target.value),type:'number',placeholder:'0',style:{...IS,paddingLeft:24}})])]),
       f.price&&e('div',{style:{display:'flex',gap:6}},[
         e('button',{onClick:()=>up('negotiable',true),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${f.negotiable?C.lm:C.bd}`,background:f.negotiable?C.lm+'15':'transparent',color:f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},e(IcTxt,{n:'message',s:12},'Negotiable')),
         e('button',{onClick:()=>up('negotiable',false),style:{flex:1,padding:'7px 0',borderRadius:9,border:`1px solid ${!f.negotiable?C.lm:C.bd}`,background:!f.negotiable?C.lm+'15':'transparent',color:!f.negotiable?C.lm:C.mt,fontSize:11,fontWeight:700,cursor:'pointer'}},e(IcTxt,{n:'lock',s:12},'Firm price')),
@@ -3837,14 +3893,14 @@ function CrtOverlay({onClose,onPost,showToast,showError,onOpenCondGuide,onOpenPr
       pdata&&e(PriceComp,{avgS:pdata.avgS,avgL:pdata.avgL,rng:pdata.rng,userPrice:f.price}),
       e('div',null,[
         e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}},[
-          e('label',{style:{...LS,marginBottom:0}},'CONDITION'),
+          e('label',{style:{...LBL,marginBottom:0}},'CONDITION'),
           e('button',{onClick:onOpenCondGuide,style:{background:'transparent',border:'none',color:C.lm,fontSize:10,cursor:'pointer',fontWeight:700}},'See guide ›'),
         ]),
         e('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},CONDS.map(cc=>e('button',{key:cc,onClick:()=>up('cond',cc),style:{padding:'6px 11px',borderRadius:9,border:`1px solid ${f.cond===cc?C.lm:C.bd}`,background:f.cond===cc?C.lm+'20':'transparent',color:f.cond===cc?C.lm:C.mt,fontSize:10,fontWeight:600,cursor:'pointer'}},cc))),
       ]),
       e('div',null,[
         e('div',{key:'lb',style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:5}},[
-          e('label',{style:{...LS,marginBottom:0}},'DESCRIPTION'),
+          e('label',{style:{...LBL,marginBottom:0}},'DESCRIPTION'),
           e('button',{onClick:()=>onOpenProhibited&&onOpenProhibited(),style:{background:'transparent',border:'none',color:C.lm,fontSize:9,fontWeight:700,cursor:'pointer',padding:0}},'What can\'t be listed?'),
         ]),
         e('textarea',{key:'ta',value:f.desc,onChange:ev=>up('desc',ev.target.value),maxLength:2000,placeholder:"Describe condition, why selling, preferred meet-up...",rows:3,style:{...IS,resize:'vertical',lineHeight:1.5,borderColor:cc.blocked?C.rd:C.bd}}),
@@ -4933,7 +4989,13 @@ function App(){
   const [me,setMe]=useState(null);
   const [tab,setTab]=useState('feed');
   const [view,setView]=useState(null);
-  const [saved,setSaved]=useState([1,2,4,6,8]);
+  // These four used to be seeded with demo values at mount and only replaced if
+  // the corresponding fetch came back non-empty. For a real account that meant
+  // the header heart badge read "5" over an empty Saved list (the seeded
+  // integer ids can't match UUID listings), the bell showed 3 fake unread, and
+  // you appeared to follow three people who don't exist. They start empty now;
+  // seedDemoState() fills them in if the app turns out to be in sample mode.
+  const [saved,setSaved]=useState([]);
   const [savedMeta,setSavedMeta]=useState({}); // listing_id -> {prev_price, created_at}
   const [crt,setCrt]=useState(false);
   const [crtPrefill,setCrtPrefill]=useState(null); // for relist
@@ -4950,15 +5012,15 @@ function App(){
   const [browseDist,setBrowseDist]=useState(()=>kv.get('browseDist',25));
   // Paddles are the core of the marketplace, so that's the default landing category.
   // Stale values from the retired Shoes/Bags/Apparel/Accessories tabs map to Gear.
-  const [marketCat,setMarketCat]=useState(()=>{const v=kv.get('marketCat','Paddles');return ['All','Paddles','Gear'].includes(v)?v:'Gear';});
+  const [marketCat,setMarketCat]=useState(()=>{const v=kv.get('marketCat','Paddles');return ['All','Paddles','Gear'].includes(v)?v:'Paddles';});
   // Persisted Market filters — hydrated from kv on first render, then re-written by an effect below.
   const [marketFilters,setMarketFilters]=useState(()=>{const stored=kv.get('marketFilters',null);return stored?normFilters(stored):{...initFilters};});
-  const [msgs,setMsgs]=useState([...MSGS_INIT]);
+  const [msgs,setMsgs]=useState([]);
   const [activeMsgIdx,setActiveMsgIdx]=useState(null);
   const demoUserList=(ids)=>ids.map(id=>US.find(u=>u.id===id)).filter(Boolean);
-  const [following,setFollowing]=useState([1,4,6]); // user ids I follow (demo seed)
-  const [followers,setFollowers]=useState(demoUserList([...(FOLLOW_GRAPH[0]||[])])); // who follows me
-  const [followingUsers,setFollowingUsers]=useState(demoUserList([1,4,6])); // profiles I follow
+  const [following,setFollowing]=useState([]);       // user ids I follow
+  const [followers,setFollowers]=useState([]);       // who follows me
+  const [followingUsers,setFollowingUsers]=useState([]); // profiles I follow
   // Global UI feedback
   const [toast,setToast]=useState(null);
   const [errorMsg,setErrorMsg]=useState(null);
@@ -5014,13 +5076,33 @@ function App(){
     window.addEventListener('online',on);window.addEventListener('offline',off);
     return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};
   },[]);
+  // Live mirrors of state the realtime handlers need to read. Keeping these out
+  // of that effect's dependency array is what stops the channel from being
+  // rebuilt on every save and every thread switch.
+  const savedRef=useRef(saved);
+  useEffect(()=>{savedRef.current=saved;},[saved]);
+  const activeMsgIdxRef=useRef(activeMsgIdx);
+  useEffect(()=>{activeMsgIdxRef.current=activeMsgIdx;},[activeMsgIdx]);
+
   // Recently viewed listing ids (hydrated from kv)
   const [recentlyViewed,setRecentlyViewed]=useState(()=>recentGet());
   const showToast=useCallback((msg)=>setToast(msg),[]);
   const showError=useCallback((msg)=>setErrorMsg(msg),[]);
 
-  // Persist filters/location/category on change
-  useEffect(()=>{kv.set('browseDist',browseDist);},[browseDist]);
+  // Persist filters/location/category on change. browseDist is also the account's
+  // search radius, so it goes to user_settings as well as local kv — otherwise
+  // the radius you set on one device means nothing on the next.
+  const radiusHydrated=useRef(false);
+  useEffect(()=>{
+    kv.set('browseDist',browseDist);
+    if(!radiusHydrated.current)return;          // don't echo the value we just loaded back at the server
+    if(!me?.id||browseDist==='anywhere')return;
+    const n=Number(browseDist);
+    if(!Number.isFinite(n))return;
+    sb.from('user_settings').update({search_radius_mi:n}).eq('user_id',me.id)
+      .then(({error})=>{if(error)console.warn('search_radius_mi',error);});
+  },[browseDist,me]);
+
   useEffect(()=>{kv.set('marketCat',marketCat);},[marketCat]);
   useEffect(()=>{kv.set('marketFilters',marketFilters);},[marketFilters]);
 
@@ -5028,6 +5110,17 @@ function App(){
   useEffect(()=>{FOLLOWING=new Set(following);},[following]);
   useEffect(()=>{FOLLOW_GRAPH[0]=new Set((followers||[]).map(u=>u.id));},[followers]);
   const [settings,setSettings]=useState({name:ME.name,location:ME.loc,skill:ME.skill,cashapp:ME.cashapp,venmo:ME.venmo,notifWishlist:true,notifPriceDrops:true,notifMessages:true,preciseLoc:false,blockedCt:0,darkMode:themeMode==='dark'});
+  // Adopt the account's stored search radius once, when settings first arrive
+  // from the server. Declared here rather than beside the other persistence
+  // effects because it reads `settings`, which isn't initialised until above.
+  useEffect(()=>{
+    if(radiusHydrated.current)return;
+    const r=settings&&settings.searchRadius;
+    if(r==null)return;
+    radiusHydrated.current=true;
+    setBrowseDist(Number(r)||25);
+  },[settings.searchRadius]);
+
   // Sync darkMode toggle <-> themeMode
   useEffect(()=>{const target=settings.darkMode?'dark':'light';if(target!==themeMode)setThemeMode(target);},[settings.darkMode]);
 
@@ -5063,6 +5156,10 @@ function App(){
             notifWishlist:us.notif_wishlist,notifPriceDrops:us.notif_price_drops,
             notifMessages:us.notif_messages,
             preciseLoc:us.precise_location,blockedCt:0,searchRadius:us.search_radius_mi||25,
+            // searchRadius was read here and then never used anywhere — the
+            // actual browsing radius lived in a separate kv-backed `browseDist`,
+            // so the saved server-side value did nothing. They're one value now;
+            // see the sync effect below.
             darkMode:themeRef.current==='dark',
           });
         }
@@ -5129,6 +5226,10 @@ function App(){
   // --- LISTINGS FETCH ---
   const [dataVer,setDataVer]=useState(0);
   const [dataLoading,setDataLoading]=useState(false);
+  // Flips true the first time fetchListings resolves, either way. Anything that
+  // keys off "this account has nothing yet" has to wait for this — otherwise it
+  // fires against the empty initial state on every single load.
+  const [dataReady,setDataReady]=useState(false);
   // True when the listings table came back empty and we're showing seeded
   // sample data. Drives the "Sample listings" banner so nobody tries to buy
   // from a seller who isn't there.
@@ -5155,13 +5256,26 @@ function App(){
       // isn't an empty shell, but flag it so the UI can say so. Showing seeded
       // sellers as if they were real neighbours means someone messages a person
       // who doesn't exist and waits for a reply that can't come.
+      DEMO_MODE=true;
       setDemoData(true);
-      setDataLoading(false);setDataVer(v=>v+1);setHasMoreListings(false);return;
+      // Re-seed the rest of the demo surfaces. The conversation/notification/
+      // follow/saved fetches now clear themselves on an empty result (so a real
+      // account with no activity looks empty instead of inheriting Marcus and
+      // three followers who don't exist). That's the right behaviour when the
+      // database is real and quiet, and the wrong one when there's no data at
+      // all — so sample mode puts the seed back. Either resolution order
+      // converges here, because this branch runs last for a genuinely empty DB.
+      seedDemoState();
+      setDataLoading(false);setDataReady(true);setDataVer(v=>v+1);setHasMoreListings(false);return;
     }
+    DEMO_MODE=false;
     setDemoData(false);
     // Build users map from sellers
     const usersMap=new Map();
-    (rows||[]).forEach(r=>{if(r.seller&&!usersMap.has(r.seller.id))usersMap.set(r.seller.id,profileToUser(r.seller));});
+    // Soft-deleted accounts (profiles.deleted_at) were still resolving as
+    // sellers, followers and leaderboard entries — the deletion flow set the
+    // column and nothing anywhere read it.
+    (rows||[]).forEach(r=>{if(r.seller&&!r.seller.deleted_at&&!usersMap.has(r.seller.id))usersMap.set(r.seller.id,profileToUser(r.seller));});
     // Attach distance to each user
     if(meLL){
       for(const u of usersMap.values()){
@@ -5175,6 +5289,7 @@ function App(){
     // Map listings
     const active=[],sold=[];
     (rows||[]).forEach(r=>{
+      if(r.seller&&r.seller.deleted_at)return;   // owner deleted their account
       const L=mapListingRow(r,meLL);
       if(r.status==='sold')sold.push(L);else active.push(L);
     });
@@ -5185,11 +5300,17 @@ function App(){
       price:s.sold_price?Number(s.sold_price):s.price,
       orig:s.orig||s.price,dist:s.dist,ago:s.sold_at?timeAgo(s.sold_at):s.ago,loc:s.loc,
     }));
+    // Full objects, unabridged and uncapped — SOLD above throws away photos,
+    // description and specs and keeps only 8 rows, which left a sold listing
+    // with nothing anywhere to look it up from. The seller's own sale history
+    // and Relist both read from here.
+    MY_SOLD.length=0;sold.filter(s=>!isBlocked(s.sid)).forEach(s=>MY_SOLD.push(s));
     // Remember the oldest row's timestamp so loadMoreListings can paginate from there
     const last=rows[rows.length-1];
     setListingsCursor(last?.created_at||null);
     setHasMoreListings(rows.length>=LISTINGS_PAGE_SIZE);
     setDataLoading(false);
+    setDataReady(true);
     setDataVer(v=>v+1);
   },[me]);
 
@@ -5207,6 +5328,7 @@ function App(){
     if(error){console.error('listings paginate',error);showError('Could not load more listings. Check your connection.');return;}
     if(!rows||rows.length===0){setHasMoreListings(false);return;}
     rows.forEach(r=>{
+      if(r.seller&&r.seller.deleted_at)return;
       if(r.seller&&!US.find(u=>u.id===r.seller.id)){
         const u=profileToUser(r.seller);
         if(meLL&&u.lat!=null&&u.lng!=null){const d=haversineMi(meLL.lat,meLL.lng,u.lat,u.lng);if(d!=null)u.dist=Math.round(d*10)/10;}
@@ -5237,16 +5359,37 @@ function App(){
       .order('last_message_at',{ascending:false})
       .limit(50);
     if(error){console.error('convs fetch',error);showError('Could not refresh your messages. Pull down to retry.');return;}
-    if(!rows||rows.length===0)return; // keep demo data
+    // An empty result means this account has no conversations — show that.
+    // Holding onto the seeded threads meant a new user could open one, type a
+    // reply to "Marcus", watch it appear, and wait for an answer from someone
+    // who was never there. Sample mode is the one case where the seed is honest.
+    if(!rows||rows.length===0){if(!DEMO_MODE)setMsgs([]);return;}
     // Sort messages within each conversation
     rows.forEach(r=>{if(r.messages)r.messages.sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));});
-    setMsgs(rows.map(r=>mapConversation(r,me.id)).filter(t=>!isBlocked(t.wu&&t.wu.id)));
+    // Returned as well as set, so callers that need to activate a specific
+    // thread can find its index in the list they just caused to load, instead
+    // of calling setActiveMsgIdx from inside a setMsgs updater on a timer.
+    const threads=rows.map(r=>mapConversation(r,me.id)).filter(t=>!isBlocked(t.wu&&t.wu.id));
+    setMsgs(threads);
+    return threads;
   },[me]);
 
   useEffect(()=>{if(me)fetchConversations();},[me,fetchConversations]);
 
   // --- NOTIFICATIONS ---
-  const [notifs,setNotifs]=useState([...NOTIFS]);
+  const [notifs,setNotifs]=useState([]);
+
+  // Restores every seeded surface at once. Called only from the sample-data
+  // branch of fetchListings, so it can never fire on an account that has a real
+  // (merely quiet) database behind it.
+  const seedDemoState=useCallback(()=>{
+    setMsgs([...MSGS_INIT]);
+    setNotifs([...NOTIFS]);
+    setSaved([1,2,4,6,8]);
+    setFollowing([1,4,6]);
+    setFollowingUsers(demoUserList([1,4,6]));
+    setFollowers(demoUserList([...(FOLLOW_GRAPH[0]||[])]));
+  },[]);
   // gearmatch: a wishlist somewhere matches gear you've flagged for sale
   // (migration 0007). wantreply: someone answered your want post (0008).
   const TYPE_ICONS={wishlist:'flame',message:'message',pricedrop:'dollar',offer:'dollar',follow:'users',newlisting:'tag',gearmatch:'swap',wantreply:'message'};
@@ -5259,7 +5402,9 @@ function App(){
   const fetchNotifications=useCallback(async()=>{
     if(!me?.id)return;
     const {data}=await sb.from('notifications').select('*').eq('user_id',me.id).order('created_at',{ascending:false}).limit(50);
-    if(data&&data.length>0)setNotifs(data.map(mapNotif));
+    if(!data)return;                                   // request failed — leave what's on screen
+    if(data.length===0){if(!DEMO_MODE)setNotifs([]);return;}
+    setNotifs(data.map(mapNotif));
   },[me]);
   useEffect(()=>{if(me)fetchNotifications();},[me,fetchNotifications]);
   const markNotifRead=async(id)=>{
@@ -5278,12 +5423,19 @@ function App(){
     const {data:rRows}=await sb.from('follows')
       .select('follower_id, follower:profiles!follower_id(*)')
       .eq('following_id',me.id);
-    if(fRows&&fRows.length>0){
-      setFollowing(fRows.map(r=>r.following_id));
-      setFollowingUsers(fRows.filter(r=>r.followed).map(r=>profileToUser(r.followed)));
+    // `deleted_at` is set by the account-deletion flow. Nothing filtered on it
+    // before, so a deleted user kept showing up as someone you follow.
+    const live=(p)=>p&&!p.deleted_at;
+    if(fRows){
+      if(fRows.length===0){if(!DEMO_MODE){setFollowing([]);setFollowingUsers([]);}}
+      else{
+        setFollowing(fRows.filter(r=>live(r.followed)||!r.followed).map(r=>r.following_id));
+        setFollowingUsers(fRows.filter(r=>live(r.followed)).map(r=>profileToUser(r.followed)));
+      }
     }
-    if(rRows&&rRows.length>0){
-      setFollowers(rRows.filter(r=>r.follower).map(r=>profileToUser(r.follower)));
+    if(rRows){
+      if(rRows.length===0){if(!DEMO_MODE)setFollowers([]);}
+      else setFollowers(rRows.filter(r=>live(r.follower)).map(r=>profileToUser(r.follower)));
     }
   },[me]);
   useEffect(()=>{if(me)fetchFollows();},[me,fetchFollows]);
@@ -5351,7 +5503,12 @@ function App(){
   //      should also have a DB trigger — see SQL in comment block below.)
   useEffect(()=>{
     if(!me?.id)return;
-    const savedSet=new Set(saved.filter(x=>typeof x==='string'));
+    // saved and activeMsgIdx used to be effect dependencies, which meant every
+    // save, unsave and thread tap tore down the Postgres channel and opened a
+    // new one — dropping any event that landed mid-swap and generating a lot of
+    // pointless socket traffic. They're read through refs now, so the channel is
+    // created once per signed-in user and stays up.
+    const savedSetOf=()=>new Set((savedRef.current||[]).filter(x=>typeof x==='string'));
     const ch=sb.channel('user-'+me.id)
       // New messages: append to the right thread in place
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},(payload)=>{
@@ -5365,7 +5522,7 @@ function App(){
           pushNotify(ms[i]?.n||'New message',lastTxt,{tag:'msg-'+m.conversation_id});
           return ms.map((t,idx)=>idx!==i?t:{
             ...t,cv:[...t.cv,mapped],last:lastTxt,time:'Now',
-            unread:idx===activeMsgIdx?0:(t.unread||0)+1,
+            unread:idx===activeMsgIdxRef.current?0:(t.unread||0)+1,
           });
         });
       })
@@ -5380,7 +5537,7 @@ function App(){
       // Listing updates: detect price drops on saved listings and notify locally
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'listings'},(payload)=>{
         const n=payload.new,o=payload.old;if(!n||!o)return;
-        if(!savedSet.has(n.id))return;
+        if(!savedSetOf().has(n.id))return;
         const oldP=Number(o.price),newP=Number(n.price);
         if(!isNaN(oldP)&&!isNaN(newP)&&newP<oldP){
           // Refresh listings so the new price shows everywhere
@@ -5423,7 +5580,7 @@ function App(){
       })
       .subscribe();
     return()=>{sb.removeChannel(ch);};
-  },[me,fetchConversations,activeMsgIdx,saved]);
+  },[me,fetchConversations]);
 
   const togSv=async(id)=>{
     // For demo (integer ids), just toggle locally
@@ -5506,8 +5663,11 @@ function App(){
       if(!mounted||!data)return;
       const ids=data.map(r=>r.listing_id);
       const meta={};data.forEach(r=>{meta[r.listing_id]={prev_price:r.prev_price,created_at:r.created_at};});
-      // Merge with demo integer ids only if there are no DB rows yet
-      if(ids.length>0){setSaved(ids);setSavedMeta(meta);}
+      // Authoritative. This used to only apply when non-empty, which left the
+      // header badge counting five seeded integer ids that no real listing
+      // could ever match — a permanent "5" over an empty Saved screen.
+      if(ids.length===0&&DEMO_MODE)return;
+      setSaved(ids);setSavedMeta(meta);
     });
     return()=>{mounted=false;};
   },[me]);
@@ -5672,10 +5832,14 @@ function App(){
     const {data:msgRow,error:mErr}=await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'buynow',payload}).select().single();
     if(mErr){console.error('buynow msg',mErr);showError('That didn\'t go through. Your offer was not sent — try again.');return;}
     await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:buyPrice,kind:'buynow'});
-    await fetchConversations();
+    const threads=await fetchConversations();
     setTab('messages');setView(null);
-    // Activate this conversation
-    setTimeout(()=>{setMsgs(ms=>{const i=ms.findIndex(t=>t.id===convId);if(i>=0)setActiveMsgIdx(i);return ms;});},50);
+    // Activate this conversation. Previously this reached into a setMsgs
+    // updater to call setActiveMsgIdx — a side effect inside a state updater,
+    // which double-fires under StrictMode — and raced a 50ms timer against a
+    // fetch that had already been awaited on the line above.
+    const i=(threads||[]).findIndex(t=>t.id===convId);
+    if(i>=0)setActiveMsgIdx(i);
   };
 
   const initOffer=async(L,amount,note)=>{
@@ -5717,15 +5881,38 @@ function App(){
     if(safeNote){
       await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'text',body:safeNote});
     }
-    await fetchConversations();
+    const threads=await fetchConversations();
     setOfferOpen(null);setTab('messages');setView(null);
-    setTimeout(()=>{setMsgs(ms=>{const i=ms.findIndex(t=>t.id===convId);if(i>=0)setActiveMsgIdx(i);return ms;});},50);
+    const i=(threads||[]).findIndex(t=>t.id===convId);
+    if(i>=0)setActiveMsgIdx(i);
   };
 
-  const goMsg=(L)=>{
-    const existing=msgs.findIndex(m=>m.wu.id===L.sid);
-    if(existing>=0)setActiveMsgIdx(existing);
+  // Message the seller. This only ever looked for an *existing* thread — if you
+  // hadn't spoken to that seller before, it switched to the Messages tab and
+  // left activeMsgIdx pointing at whatever was there before (often nothing, and
+  // sometimes an unrelated conversation). Buy Now and Make Offer both call
+  // get_or_create_conversation; this now does the same.
+  const goMsg=async(L)=>{
+    if(!L)return;
+    const existing=msgs.findIndex(m=>m.wu&&String(m.wu.id)===String(L.sid));
+    if(existing>=0){setActiveMsgIdx(existing);setView(null);setTab('messages');return;}
+    if(isBlocked(L.sid)){showError('You\'ve blocked this seller. Unblock them in Settings to message them.');return;}
+    // Demo sellers have integer ids and no row to create a conversation against.
+    if(!isUuid(L.sid)||!me?.id||!isUuid(L.id)){
+      const thread={
+        id:Date.now(),wu:gU(L.sid),
+        ref:{b:listEyebrow(L),m:listTitle(L),p:L.price,id:L.id},
+        isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:'',cv:[],
+      };
+      setMsgs(ms=>[thread,...ms]);setActiveMsgIdx(0);
+      setView(null);setTab('messages');return;
+    }
+    const {data:convId,error}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:L.sid});
+    if(error){console.error('conv create',error);showError('Could not open that conversation. Check your connection and try again.');return;}
+    const threads=await fetchConversations();
     setView(null);setTab('messages');
+    const i=(threads||[]).findIndex(t=>t.id===convId);
+    setActiveMsgIdx(i>=0?i:0);
   };
 
   const TABS=[{id:'feed',ic:'bolt',l:'Discover'},{id:'market',ic:'tag',l:'Market'},{id:'sell',ic:'plus',l:'Sell',center:true},{id:'messages',ic:'message',l:'Messages'},{id:'profile',ic:'user',l:'Profile'}];
@@ -5906,7 +6093,12 @@ function App(){
           }}),
         offerOpen&&e(OfferOverlay,{L:offerOpen,onClose:()=>setOfferOpen(null),onSubmit:(amt,note)=>{initOffer(offerOpen,amt,note);showToast('Offer sent — you\'ll be notified when they respond');}}),
         pst&&e('div',{style:{position:'absolute',top:14,left:0,right:0,display:'flex',justifyContent:'center',zIndex:30}},[e('div',{style:{background:C.ok,color:'#fff',borderRadius:18,padding:'7px 17px',fontSize:12,fontWeight:800,boxShadow:`0 4px 12px ${C.ok}44`}},'Listing posted')]),
-        !overlayOpen&&!onboardDismissed&&me&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{openPanel('settings');setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
+        // `followers` was seeded with three demo users at mount and only ever
+        // replaced by a non-empty fetch, so followers.length===0 was never true
+        // and this banner could not render for anyone. Now that the follow state
+        // starts empty, the gate needs dataReady so it doesn't flash for every
+        // user on every load before the fetches have answered.
+        !overlayOpen&&!onboardDismissed&&me&&dataReady&&!demoData&&followers.length===0&&onboardStep<3&&tab==='feed'&&e(OnboardingBanner,{key:'ob',step:onboardStep,onSkip:()=>setOnboardDismissed(true),onOpenSettings:()=>{openPanel('settings');setOnboardStep(s=>Math.min(s+1,2));},onOpenGear:()=>{setTab('profile');setOnboardStep(s=>Math.min(s+1,2));}}),
         !overlayOpen&&[
           view&&e(LDetail,{key:'dt',L:view,onBack:()=>setView(null),onMsg:()=>goMsg(view),onBuyNow:()=>setBuyConfirm(view),onMakeOffer:()=>openPanel('offer',view),saved:saved.includes(view.id),onSave:togSv,onView:viewListing,sold:savedStatusFor(view,savedMeta&&savedMeta[view.id]).type==='sold',following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenSafety:()=>setSafetyOpen(true),onOpenCondGuide:()=>setCondGuideOpen(true),onEditListing:handleEditListing,onDeleteListing:handleDeleteListing,onMarkSold:handleMarkSold,onOpenSeller:(u)=>openPanel('seller',u),onReport:setReportTarget}),
           !view&&tab==='feed'&&e(FeedTab,{key:'fd',onView:viewListing,saved,onSave:togSv,dist:browseDist,onDistChange:setBrowseDist,onCatSelect:goCat,onBrandSelect:goBrand,onWishPrompt:()=>setTab('profile'),following,onRefresh:fetchListings,recentlyViewed,dataLoading,onSavedSearch:(t)=>showToast('Search saved — find it under Market to run it again'),demoData,onCreate:()=>{openPanel('create');setView(null);}}),
@@ -5927,5 +6119,7 @@ function App(){
   ]);
 }
 
-ReactDOM.render(e(App),document.getElementById('root'));
+// React 18: createRoot, not the legacy render() shim (which logs a deprecation
+// warning and opts the whole tree out of concurrent rendering).
+ReactDOM.createRoot(document.getElementById('root')).render(e(App));
 </script>
