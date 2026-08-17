@@ -1081,6 +1081,37 @@ const suggestedIds=(followSet)=>{
 // Paddles not in this table fall back to pdbUnknown() so the UI degrades
 // gracefully instead of silently dropping the spec panel.
 // =====================================================================
+// Followers / following for an *arbitrary* user, for the public profile view.
+// The App-level fetchFollows only ever asks about the signed-in account, so
+// this is the version that takes an id.
+//
+// FOLLOW_GRAPH[id] is the set of people who follow id, so "who does id follow"
+// is a reverse scan over its keys. Real accounts go to the follows table and
+// skip soft-deleted profiles the same way fetchFollows does.
+async function loadFollowsFor(userId){
+  const empty={followers:[],following:[]};
+  if(userId==null)return empty;
+  if(typeof userId==='number'){
+    return{
+      followers:[...(FOLLOW_GRAPH[userId]||[])].map(id=>gU(id)).filter(Boolean),
+      following:Object.keys(FOLLOW_GRAPH)
+        .filter(k=>FOLLOW_GRAPH[k]&&FOLLOW_GRAPH[k].has(userId))
+        .map(k=>gU(Number(k))).filter(Boolean),
+    };
+  }
+  try{
+    const [fRes,rRes]=await Promise.all([
+      sb.from('follows').select('following_id, followed:profiles!following_id(*)').eq('follower_id',userId),
+      sb.from('follows').select('follower_id, follower:profiles!follower_id(*)').eq('following_id',userId),
+    ]);
+    const live=(p)=>p&&!p.deleted_at;
+    return{
+      following:(fRes.data||[]).filter(r=>live(r.followed)).map(r=>profileToUser(r.followed)).filter(u=>!isBlocked(u.id)),
+      followers:(rRes.data||[]).filter(r=>live(r.follower)).map(r=>profileToUser(r.follower)).filter(u=>!isBlocked(u.id)),
+    };
+  }catch(err){console.error('loadFollowsFor',err);return empty;}
+}
+
 const PDB={
 // ---- SELKIRK ----
 'Selkirk:Vanguard Power Air Invikta':{core:'Polymer',face:'Raw T700 Carbon',shape:'Elongated',thk:'16mm',wt:'7.4oz',grLen:'Standard',yr:2023,avgS:178,avgL:192,rng:[160,210]},
@@ -1704,19 +1735,28 @@ function FollowBtn({userId,following,onToggle,sz='sm'}){
 function MutualBadge({count}){
   if(!count||count<1)return null;
   return e('span',{style:{display:'inline-flex',alignItems:'center',gap:3,fontSize:9,color:C.pu,fontWeight:700,background:C.pu+'15',border:`1px solid ${C.pu}35`,borderRadius:8,padding:'2px 7px'}},[e(Ic,{key:'i',n:'users',s:10}),e('span',{key:'t'},`${count} mutual`)]);}
-function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showVia}){
+function CommunityList({users,following,onToggle,meId,emptyMsg,followerSet,showVia,onOpenUser}){
   if(!users||users.length===0)return e('div',{style:{textAlign:'center',padding:'30px 14px',color:C.mt,fontSize:11}},emptyMsg||'Nobody here yet');
   return e('div',{className:'stagger',style:{display:'flex',flexDirection:'column',gap:8}},users.map(u=>{
     const followsMe=followerSet&&followerSet.has(u.id);
+    // The avatar + name block opens the profile; the follow button stays a
+    // separate target so tapping Follow doesn't also navigate away. Previously
+    // the only thing you could do with a search result was follow it, which
+    // meant deciding whether to follow someone you couldn't look at first.
+    const open=onOpenUser?()=>{haptic();onOpenUser(u);}:null;
     return e('div',{key:u.id,style:{background:C.cd,borderRadius:11,border:`1px solid ${C.bd}`,padding:'9px 11px',display:'flex',alignItems:'center',gap:9,boxShadow:'var(--sh-1)'}},[
-      e(Av,{key:'a',u,sz:38}),
-      e('div',{key:'i',style:{flex:1,minWidth:0}},[
-        e('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}},[
-          e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),
-          u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),
-          followsMe&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px'}},'Follows you'),
+      e('div',{key:'t',onClick:open,role:open?'button':null,tabIndex:open?0:null,
+        onKeyDown:open?(ev)=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();open();}}:null,
+        style:{flex:1,minWidth:0,display:'flex',alignItems:'center',gap:9,cursor:open?'pointer':'default',background:'none',border:'none',padding:0,textAlign:'left'}},[
+        e(Av,{key:'a',u,sz:38}),
+        e('div',{key:'i',style:{flex:1,minWidth:0}},[
+          e('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}},[
+            e('span',{style:{fontSize:12,fontWeight:700,color:C.tx}},u.name),
+            u.vfd&&e(Ic,{n:'checkDouble',s:10,c:C.lm,sw:2.5}),
+            followsMe&&e('span',{style:{fontSize:9,color:C.pu,fontWeight:800,background:C.pu+'18',borderRadius:5,padding:'1px 5px'}},'Follows you'),
+          ]),
+          e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?e(IcTxt,{n:'users',s:9},`Followed by ${u.via} you know`):e(IcTxt,{n:'pin',s:9},`${u.loc||'—'} · ${u.sales||0} sales`)),
         ]),
-        e('div',{style:{fontSize:9,color:C.mt,marginTop:1}},showVia&&u.via?e(IcTxt,{n:'users',s:9},`Followed by ${u.via} you know`):e(IcTxt,{n:'pin',s:9},`${u.loc||'—'} · ${u.sales||0} sales`)),
       ]),
       u.id!==meId&&e(FollowBtn,{key:'f',userId:u.id,following,onToggle}),
     ]);
@@ -3535,7 +3575,7 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
         // users, and a "connect to rally" list that goes unanswered. Components
         // are kept intact; flip the SOCIAL_PROOF flags to bring them back.
         COMM_SUBS.length>1&&e('div',{key:'sub',style:{display:'flex',gap:6,marginBottom:11,overflowX:'auto'}},COMM_SUBS.map(([id,lbl,ico])=>e('button',{key:id,onClick:()=>setCommSub(id),style:{padding:'6px 12px',borderRadius:9,border:`1px solid ${commSub===id?C.lm:C.bd}`,background:commSub===id?C.lm+'15':'transparent',color:commSub===id?C.lm:C.mt,fontSize:11,fontWeight:commSub===id?800:600,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,display:'flex',alignItems:'center',gap:5}},[e(Ic,{key:'i',n:ico,s:12}),lbl]))),
-        activeCommSub==='network'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView}),
+        activeCommSub==='network'&&e(CommunityPanel,{key:'cm',followers,following,followingUsers,onToggle:onToggleFollow,meId:me?.id,onView,onOpenUser:onOpenSeller}),
         activeCommSub==='leaderboard'&&e(Leaderboard,{key:'lb',onOpenSeller,meId:me?.id}),
         activeCommSub==='players'&&e(PlayersNearby,{key:'pn',me:M,onOpenSeller}),
       ]),
@@ -3560,7 +3600,7 @@ function ProfileTab({onView,saved,onOpenSaved,onOpenSettings,onOpenDupr,me,saved
 }
 
 const AGO_ORDER=['12h','6h','1d','2d','3d','5d','1w','2w'];
-function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView}){
+function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView,onOpenUser}){
   const [sub,setSub]=useState('followers');
   const [q,setQ]=useState('');
   const followerSet=new Set((followers||[]).map(u=>u.id));
@@ -3627,17 +3667,17 @@ function CommunityPanel({followers,following,followingUsers,onToggle,meId,onView
       e('span',{style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',display:'flex',color:C.mt}},[e(Ic,{n:'search',s:13})]),
       e('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:activeSub==='activity'?'Search activity...':activeSub==='search'?'Search all members by name...':'Search by name or location...',style:{width:'100%',padding:'8px 10px 8px 29px',background:C.cd,border:`1px solid ${C.bd}`,borderRadius:10,color:C.tx,fontSize:11,outline:'none'}}),
     ]),
-    activeSub==='followers'&&e(CommunityList,{key:'fl',users:(followers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No followers match your search':'No followers yet — make some sales to grow your network'}),
-    activeSub==='following'&&e(CommunityList,{key:'fg',users:(followingUsers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No matches':"You're not following anyone yet. Follow sellers from their listings."}),
+    activeSub==='followers'&&e(CommunityList,{key:'fl',onOpenUser,users:(followers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No followers match your search':'No followers yet — make some sales to grow your network'}),
+    activeSub==='following'&&e(CommunityList,{key:'fg',onOpenUser,users:(followingUsers||[]).filter(nmecheck),following:following||[],onToggle,meId,followerSet,emptyMsg:lq?'No matches':"You're not following anyone yet. Follow sellers from their listings."}),
     activeSub==='suggested'&&[
       e('div',{key:'st',style:{fontSize:9,color:C.mt,marginBottom:8,lineHeight:1.4}},'People followed by sellers you already trust — a good place to grow your network.'),
-      e(CommunityList,{key:'sl',users:suggested,following:following||[],onToggle,meId,followerSet,showVia:true,emptyMsg:(following||[]).length===0?'Follow a few sellers first — then we can suggest people you may know.':'No suggestions right now'}),
+      e(CommunityList,{key:'sl',onOpenUser,users:suggested,following:following||[],onToggle,meId,followerSet,showVia:true,emptyMsg:(following||[]).length===0?'Follow a few sellers first — then we can suggest people you may know.':'No suggestions right now'}),
     ],
     activeSub==='activity'&&e(ActivityFeed,{key:'af',items:activity,onView,emptyMsg:(following||[]).length===0?'Follow sellers to see their latest listings here.':'No recent activity from people you follow'}),
     activeSub==='search'&&[
       !lq&&e('div',{key:'pr',style:{textAlign:'center',padding:'30px 14px',color:C.mt,fontSize:11,lineHeight:1.5}},'Search for anyone in the community by name to follow them — not just people already in your network.'),
       lq&&peopleSearching&&e('div',{key:'ld',style:{textAlign:'center',padding:'30px 14px',color:C.mt,fontSize:11}},'Searching…'),
-      lq&&!peopleSearching&&e(CommunityList,{key:'pl',users:peopleResults,following:following||[],onToggle,meId,followerSet,emptyMsg:`No one found matching "${q.trim()}"`}),
+      lq&&!peopleSearching&&e(CommunityList,{key:'pl',onOpenUser,users:peopleResults,following:following||[],onToggle,meId,followerSet,emptyMsg:`No one found matching "${q.trim()}"`}),
     ],
   ]);
 }
@@ -4481,9 +4521,27 @@ function ReviewsBlock({sid,compact}){
 }
 
 // --- Full seller profile view (opened from a listing's seller card) ---
-function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showToast}){
+function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showToast,onOpenUser}){
   const listings=LS.filter(l=>l.sid===u.id);
   const avg=reviewAvg(u.id)||u.rating||0;
+  // This user's own network. Loaded per-profile rather than derived from the
+  // signed-in account's lists, which only ever described *my* follows.
+  const [net,setNet]=useState(null);          // null = still loading
+  const [netSub,setNetSub]=useState('followers');
+  useEffect(()=>{
+    let alive=true;
+    setNet(null);setNetSub('followers');
+    loadFollowsFor(u.id).then(r=>{if(alive)setNet(r);});
+    return()=>{alive=false;};
+  },[u.id]);
+  const followerSet=null; // CommunityList uses this for a "Follows you" badge —
+  // it describes the *viewer's* followers, and we only have the seller's here.
+  // Passing the seller's list would label their followers as following you.
+  const netTabs=[
+    ['followers','Followers',net?net.followers.length:null],
+    ['following','Following',net?net.following.length:null],
+  ];
+  const netList=net?(netSub==='followers'?net.followers:net.following):[];
   const shareProfile=()=>{
     haptic();
     const url=`${window.location.origin}${window.location.pathname}#seller-${u.id}`;
@@ -4508,6 +4566,18 @@ function SellerProfileView({u,onBack,onView,following,onToggleFollow,meId,showTo
       u.id!==meId&&e('div',{key:'fb',style:{marginBottom:14}},[e(FollowBtn,{userId:u.id,following:following||[],onToggle:onToggleFollow||(()=>{}),sz:'lg'})]),
       u.bdg&&u.bdg.length>0&&e('div',{key:'bd',style:{display:'flex',gap:5,flexWrap:'wrap',marginBottom:14}},u.bdg.map(b=>e('span',{key:b,style:{fontSize:9,color:C.tl,background:C.tl+'15',borderRadius:8,padding:'3px 8px',border:`1px solid ${C.tl}25`}},b))),
       e('div',{key:'rv',style:{marginBottom:16}},[e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'REVIEWS'),e(ReviewsBlock,{sid:u.id})]),
+      e('div',{key:'net',style:{marginBottom:16}},[
+        e('div',{key:'t',style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},'NETWORK'),
+        e('div',{key:'tabs',style:{display:'flex',gap:5,marginBottom:9}},netTabs.map(([k,l,n])=>e('button',{key:k,onClick:()=>setNetSub(k),
+          style:{fontSize:11,fontWeight:700,cursor:'pointer',padding:'6px 11px',borderRadius:9,flexShrink:0,
+            border:`1px solid ${netSub===k?C.pu:C.dm}`,background:netSub===k?C.pu+'15':'transparent',color:netSub===k?C.pu:C.mt}},
+          n==null?l:`${l} ${n}`))),
+        net===null
+          ? e('div',{key:'ld',style:{fontSize:11,color:C.mt,padding:'14px 0',textAlign:'center'}},'Loading…')
+          : e(CommunityList,{key:'nl',users:netList,following:following||[],onToggle:onToggleFollow||(()=>{}),meId,followerSet,
+              onOpenUser:onOpenUser?(other)=>{if(String(other.id)!==String(u.id))onOpenUser(other);}:null,
+              emptyMsg:netSub==='followers'?`Nobody follows ${u.name.split(' ')[0]} yet`:`${u.name.split(' ')[0]} isn't following anyone yet`}),
+      ]),
       e('div',{key:'ls'},[
         e('div',{style:{fontSize:10,color:C.mt,fontWeight:700,letterSpacing:.5,marginBottom:8}},`LISTINGS · ${listings.length}`),
         listings.length===0?e('div',{style:{fontSize:11,color:C.mt}},'No active listings right now.'):
@@ -6074,7 +6144,7 @@ function App(){
           setMe(m=>m?{...m,vfd:true}:m);
           showToast('Phone confirmed \u2014 seller verification is pending review');
         }}),
-        sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast}),
+        sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenUser:(other)=>openPanel('seller',other)}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
         notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
