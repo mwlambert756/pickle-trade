@@ -5975,7 +5975,7 @@ function App(){
         const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:listEyebrow(L),m:listTitle(L),p:buyPrice,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Buy Now request: $${buyPrice}`,cv:[buyCard]};
         setMsgs([newThread,...msgs]);setActiveMsgIdx(0);
       }
-      setTab('messages');setView(null);return;
+      showMessagesTab();return;
     }
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
@@ -5985,7 +5985,7 @@ function App(){
     if(mErr){console.error('buynow msg',mErr);showError('That didn\'t go through. Your offer was not sent — try again.');return;}
     await sb.from('offers').insert({conversation_id:convId,message_id:msgRow.id,listing_id:L.id,offerer_id:me.id,amount:buyPrice,kind:'buynow'});
     const threads=await fetchConversations();
-    setTab('messages');setView(null);
+    showMessagesTab();
     // Activate this conversation. Previously this reached into a setMsgs
     // updater to call setActiveMsgIdx — a side effect inside a state updater,
     // which double-fires under StrictMode — and raced a 50ms timer against a
@@ -6021,7 +6021,7 @@ function App(){
         const newThread={id:Date.now(),wu:gU(sellerId),ref:{b:listEyebrow(L),m:listTitle(L),p:L.price,id:L.id},isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:`Offered $${safeAmt}`,cv:cards};
         setMsgs([newThread,...msgs]);setActiveMsgIdx(0);
       }
-      setOfferOpen(null);setTab('messages');setView(null);return;
+      showMessagesTab();return;
     }
     // Real flow
     const {data:convId,error:cErr}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:sellerId});
@@ -6034,7 +6034,7 @@ function App(){
       await sb.from('messages').insert({conversation_id:convId,sender_id:me.id,kind:'text',body:safeNote});
     }
     const threads=await fetchConversations();
-    setOfferOpen(null);setTab('messages');setView(null);
+    showMessagesTab();
     const i=(threads||[]).findIndex(t=>t.id===convId);
     if(i>=0)setActiveMsgIdx(i);
   };
@@ -6078,11 +6078,11 @@ function App(){
     if(!u||u.id==null)return false;
     if(!canDM(u.id)){showError('You can only message people you follow, or who follow you.');return false;}
     const existing=msgs.findIndex(m=>m.wu&&String(m.wu.id)===String(u.id));
-    if(existing>=0){setActiveMsgIdx(existing);setTab('messages');setView(null);return true;}
+    if(existing>=0){showMessagesTab();setActiveMsgIdx(existing);return true;}
     // Demo users have integer ids and no row to hang a conversation off.
     if(!isUuid(u.id)||!me?.id){
       const thread={id:Date.now(),wu:u,ref:null,isDirect:true,isM:false,unread:0,time:'Now',dealStatus:'browsing',last:'',cv:[]};
-      setMsgs(ms=>[thread,...ms]);setActiveMsgIdx(0);setTab('messages');setView(null);return true;
+      setMsgs(ms=>[thread,...ms]);showMessagesTab();setActiveMsgIdx(0);return true;
     }
     const {data:convId,error}=await sb.rpc('get_or_create_direct_conversation',{p_other_user_id:u.id});
     if(error){
@@ -6095,7 +6095,7 @@ function App(){
       return false;
     }
     const threads=await fetchConversations();
-    setTab('messages');setView(null);
+    showMessagesTab();
     const i=(threads||[]).findIndex(t=>t.id===convId);
     setActiveMsgIdx(i>=0?i:0);
     track('direct_thread_started',{});
@@ -6105,7 +6105,7 @@ function App(){
   const goMsg=async(L)=>{
     if(!L)return;
     const existing=msgs.findIndex(m=>m.wu&&String(m.wu.id)===String(L.sid));
-    if(existing>=0){setActiveMsgIdx(existing);setView(null);setTab('messages');return;}
+    if(existing>=0){showMessagesTab();setActiveMsgIdx(existing);return;}
     if(isBlocked(L.sid)){showError('You\'ve blocked this seller. Unblock them in Settings to message them.');return;}
     // Demo sellers have integer ids and no row to create a conversation against.
     if(!isUuid(L.sid)||!me?.id||!isUuid(L.id)){
@@ -6114,13 +6114,12 @@ function App(){
         ref:{b:listEyebrow(L),m:listTitle(L),p:L.price,id:L.id},
         isM:false,unread:0,time:'Now',dealStatus:'negotiating',last:'',cv:[],
       };
-      setMsgs(ms=>[thread,...ms]);setActiveMsgIdx(0);
-      setView(null);setTab('messages');return;
+      setMsgs(ms=>[thread,...ms]);showMessagesTab();setActiveMsgIdx(0);return;
     }
     const {data:convId,error}=await sb.rpc('get_or_create_conversation',{p_listing_id:L.id,p_other_user_id:L.sid});
     if(error){console.error('conv create',error);showError('Could not open that conversation. Check your connection and try again.');return;}
     const threads=await fetchConversations();
-    setView(null);setTab('messages');
+    showMessagesTab();
     const i=(threads||[]).findIndex(t=>t.id===convId);
     setActiveMsgIdx(i>=0?i:0);
   };
@@ -6187,6 +6186,16 @@ function App(){
     setCrt(false);setCrtPrefill(null);
     setNotifOpen(false);setSavedOpen(false);setSettingsOpen(false);
     setOfferOpen(null);setSellerView(null);
+  };
+  // Every "we just opened a conversation, show it" path goes through this.
+  // Switching the tab isn't enough on its own: SellerProfileView renders off
+  // its own `sellerView` state as a z-index 26 overlay, so without
+  // closePanels() the messages tab was rendering correctly but sitting
+  // underneath the profile you'd just tapped Message on.
+  const showMessagesTab=()=>{
+    closePanels();
+    setView(null);
+    setTab('messages');
   };
   const openPanel=(name,payload)=>{
     closePanels();
@@ -6286,7 +6295,7 @@ function App(){
         }}),
         sellerView&&e(SellerProfileView,{key:'sv',u:sellerView,onBack:()=>setSellerView(null),onView:(l)=>{setSellerView(null);viewListing(l);},following,onToggleFollow:toggleFollow,meId:me?.id,showToast,onOpenUser:(other)=>openPanel('seller',other),onMessage:startDirectThread,canMessage:canDM(sellerView.id)}),
         crt&&e(CrtOverlay,{onClose:()=>{setCrt(false);setCrtPrefill(null);},onPost:handlePost,showToast,showError,onOpenCondGuide:()=>setCondGuideOpen(true),onOpenProhibited:()=>setProhibitedOpen(true),prefill:crtPrefill}),
-        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>setTab('messages'),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
+        notifOpen&&e(NotifPanel,{onClose:()=>setNotifOpen(false),onListing:viewListing,onMsgs:()=>showMessagesTab(),notifs,onMarkRead:markNotifRead,onGear:()=>{setTab('profile');setView(null);}}),
         savedOpen&&e(SavedOverlay,{onClose:()=>setSavedOpen(false),saved,onSave:togSv,onView:(l)=>{setSavedOpen(false);viewListing(l);},savedMeta}),
         settingsOpen&&e(SettingsOverlay,{onClose:()=>setSettingsOpen(false),settings,setSettings,onSignOut:signOut,me,onOpenSafety:()=>setSafetyOpen(true),verified,onOpenVerify:()=>setVerifyOpen(true),onOpenDupr:()=>setDuprOpen(true),onOpenChangePassword:()=>setChangePwOpen(true),pushOn,showToast,
           onOpenLegal:(k)=>{track('legal_viewed',{kind:k});setLegalKind(k);},
